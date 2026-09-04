@@ -1,0 +1,698 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Кабинет Han VPN</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+  /* ───────────────────────────────────────────────
+     Han VPN — токены из промо-исходников
+     GREEN #22c55e · CREAM #F7F3EA · RED #FF2A2A · BG #0A0A0A
+     Archivo 900 (дисплей) + JetBrains Mono (служебный слой)
+     Тема одна и намеренная: чёрный терминал. Все цвета заданы явно.
+     ─────────────────────────────────────────────── */
+  :root {
+    --ink:      #0A0A0A;
+    --ink-2:    #0F1310;   /* поверхность, нейтраль со сдвигом в зелёный */
+    --ink-3:    #141A16;
+    --line:     #1E261F;
+    --line-hi:  #2C3A2F;
+    --cream:    #F7F3EA;
+    --mute:     #7F8C83;
+    --mute-2:   #5A655D;
+    --green:    #22C55E;
+    --green-dim:#137A38;
+    --red:      #FF2A2A;
+    --shell:    420px;
+
+    --t-1: 11px; --t-2: 13px; --t-3: 15px; --t-4: 18px;
+    --d-1: 30px; --d-2: 40px; --d-3: 52px;
+
+    --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: 'Archivo', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+    --ease: cubic-bezier(.2, .7, .3, 1);
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--cream);
+    font-family: var(--sans);
+    font-size: var(--t-3);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* Атмосфера: скан-линии + зелёное свечение сверху — как в баннерах */
+  .grain, .glow { position: fixed; inset: 0; pointer-events: none; z-index: 60; }
+  .grain { background: repeating-linear-gradient(0deg, rgba(247,243,234,.024) 0 1px, transparent 1px 3px); mix-blend-mode: screen; }
+  .glow  { z-index: 0; background: radial-gradient(120% 62% at 50% -12%, rgba(34,197,94,.15), transparent 62%); }
+
+  .shell {
+    position: relative; z-index: 1;
+    max-width: var(--shell); margin: 0 auto;
+    min-height: 100dvh;
+    display: flex; flex-direction: column;
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 64px); /* 64px — место под демо-панель */
+  }
+
+  /* ── Шапка ─────────────────────────────────────── */
+  .top {
+    position: sticky; top: 0; z-index: 30;
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 20px 12px;
+    background: linear-gradient(var(--ink) 72%, rgba(10,10,10,0));
+    border-bottom: 1px solid var(--line);
+  }
+  .mark { width: 30px; height: 30px; flex: none; display: block; border-radius: 9px; }
+  .wordmark { font-weight: 800; font-size: var(--t-4); letter-spacing: -.015em; }
+  .wordmark span { color: var(--green); }
+
+  .eyebrow {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 7px;
+    font-family: var(--mono); font-size: var(--t-1); font-weight: 500;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--mute);
+  }
+  .beacon { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px var(--green); }
+  [data-state="off"] .beacon { background: var(--red); box-shadow: 0 0 10px var(--red); animation: pulse 1.6s var(--ease) infinite; }
+  [data-state="off"] .eyebrow { color: var(--red); }
+  @keyframes pulse { 50% { opacity: .25; } }
+
+  /* ── Общий строй секций ────────────────────────── */
+  .sec { padding: 26px 20px; border-bottom: 1px solid var(--line); }
+  .sec:last-of-type { border-bottom: 0; }  /* под последней секцией линии не нужно */
+  .cmd {
+    font-family: var(--mono); font-size: var(--t-2); color: var(--mute);
+    display: flex; gap: 9px; align-items: baseline;
+  }
+  .cmd b { color: var(--green); font-weight: 500; }
+
+  .display {
+    font-weight: 900; font-size: var(--d-3); line-height: .88;
+    letter-spacing: -.045em; text-transform: uppercase;
+    text-wrap: balance; margin: 16px 0 0;
+  }
+  .display .hi { color: var(--green); display: block; }
+  [data-state="off"] .display .hi { color: var(--red); }
+
+  .note {
+    font-family: var(--mono); font-size: var(--t-2); color: var(--mute);
+    margin-top: 14px; display: flex; align-items: center; gap: 8px;
+  }
+  .note .arrow { color: var(--green); }
+  .caret { display: inline-block; width: 8px; height: 15px; background: var(--green); animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: .2; } }
+
+  /* Шкала — прямая цитата из баннеров */
+  .rail { margin-top: 22px; display: flex; align-items: center; gap: 12px; }
+  .rail .track { flex: 1; height: 4px; background: var(--ink-3); overflow: hidden; }
+  .rail .fill {
+    height: 100%; background: var(--green); box-shadow: 0 0 16px rgba(34,197,94,.75);
+    width: var(--pct, 100%); transition: width .5s var(--ease);
+  }
+  [data-state="off"] .rail .fill { background: var(--red); box-shadow: 0 0 16px rgba(255,42,42,.6); }
+  .rail .val {
+    font-family: var(--mono); font-size: var(--t-2); color: var(--mute);
+    font-variant-numeric: tabular-nums; letter-spacing: .04em;
+  }
+  [data-state="off"] .rail .val { color: var(--red); }
+
+  /* ── Кнопки ────────────────────────────────────── */
+  .btn {
+    appearance: none; border: 1px solid transparent; cursor: pointer;
+    font-family: var(--sans); font-weight: 700; font-size: var(--t-3);
+    letter-spacing: -.005em;
+    display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+    padding: 14px 18px; width: 100%; text-decoration: none;
+    transition: transform .12s var(--ease), background .18s var(--ease), border-color .18s var(--ease), color .18s var(--ease);
+  }
+  .btn:active { transform: scale(.985); }
+  .btn:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+
+  .btn-solid { background: var(--green); color: #04140A; }
+  .btn-solid:hover { background: #2ade6c; }
+  .btn-alarm { background: var(--red); color: #fff; }
+  .btn-alarm:hover { background: #ff4444; }
+  .btn-ghost { background: var(--ink-2); border-color: var(--line-hi); color: var(--cream); }
+  .btn-ghost:hover { border-color: var(--green-dim); background: var(--ink-3); }
+  /* Текстовая ссылка-переключатель */
+  .linkish {
+    appearance: none; background: none; border: 0; cursor: pointer; padding: 0;
+    font-family: var(--mono); font-size: var(--t-2); color: var(--mute);
+    border-bottom: 1px dashed var(--line-hi); line-height: 1.35;
+  }
+  .linkish:hover { color: var(--green); border-bottom-color: var(--green-dim); }
+  .linkish:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+
+  /* ── Мастер: на экране всегда ровно одно действие ─
+     Без подписки ставить приложение незачем: мастер сворачивается
+     в тихую строку, чтобы не спорить с кнопкой продления. */
+  #showConnect { display: none; }
+  [data-state="off"]:not([data-connect-open]) #prog,
+  [data-state="off"]:not([data-connect-open]) #wiz { display: none; }
+  [data-state="off"]:not([data-connect-open]) #showConnect { display: block; }
+
+  .prog { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+  .prog-bar { display: flex; gap: 4px; flex: 1; }
+  .prog-bar i { flex: 1; height: 4px; background: var(--ink-3); transition: background .3s var(--ease); }
+  .prog-bar i[data-on] { background: var(--green); box-shadow: 0 0 12px rgba(34,197,94,.55); }
+  .prog-txt {
+    font-family: var(--mono); font-size: var(--t-1); letter-spacing: .16em;
+    text-transform: uppercase; color: var(--mute); white-space: nowrap;
+  }
+
+  .wiz-step { margin-top: 22px; animation: rise .3s var(--ease) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+
+  .wiz-title { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -.025em; line-height: 1.15; text-wrap: balance; }
+  .wiz-title.ok { color: var(--green); text-transform: uppercase; font-weight: 900; font-size: var(--d-1); letter-spacing: -.035em; }
+  .wiz-text { margin: 9px 0 0; font-size: var(--t-3); color: var(--mute); line-height: 1.5; max-width: 34ch; }
+  .wiz-text b { color: var(--cream); font-weight: 600; }
+  .wiz-step > .btn { margin-top: 20px; }
+
+  /* запасные пути — тихие, всегда под главной кнопкой */
+  .wiz-alt { margin-top: 18px; display: flex; flex-direction: column; gap: 13px; align-items: flex-start; }
+
+  /* ── Шторка выбора устройства ──────────────────── */
+  .sheet-bg {
+    position: fixed; inset: 0; z-index: 70;
+    background: rgba(6,8,6,.72); backdrop-filter: blur(3px);
+    opacity: 0; pointer-events: none; transition: opacity .22s var(--ease);
+  }
+  .sheet-bg[data-open] { opacity: 1; pointer-events: auto; }
+  .sheet {
+    position: absolute; left: 50%; bottom: 0; transform: translate(-50%, 100%);
+    width: 100%; max-width: var(--shell);
+    background: var(--ink-2); border-top: 1px solid var(--line-hi);
+    padding: 20px 20px calc(24px + env(safe-area-inset-bottom, 0));
+    transition: transform .28s var(--ease);
+  }
+  .sheet-bg[data-open] .sheet { transform: translate(-50%, 0); }
+  .sheet h3 {
+    margin: 0 0 16px; font-family: var(--mono); font-size: var(--t-1);
+    letter-spacing: .16em; text-transform: uppercase; color: var(--mute); font-weight: 500;
+  }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .grid button {
+    appearance: none; cursor: pointer;
+    background: var(--ink); border: 1px solid var(--line);
+    color: var(--cream); padding: 14px 8px;
+    font-family: var(--mono); font-size: var(--t-2);
+    transition: border-color .18s var(--ease), color .18s var(--ease);
+  }
+  .grid button:hover { border-color: var(--green-dim); }
+  .grid button[aria-pressed="true"] { border-color: var(--green); color: var(--green); }
+  .grid button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+
+  /* ── Тост ──────────────────────────────────────── */
+  .toast {
+    position: fixed; left: 50%; bottom: 68px; z-index: 90;
+    transform: translate(-50%, 18px);
+    background: var(--green); color: #04140A;
+    font-family: var(--mono); font-size: var(--t-2); font-weight: 700;
+    padding: 10px 16px;
+    opacity: 0; pointer-events: none;
+    transition: opacity .2s var(--ease), transform .2s var(--ease);
+  }
+  .toast[data-show] { opacity: 1; transform: translate(-50%, 0); }
+
+  /* ── Панель прототипа (в проде удаляется) ──────── */
+  .proto {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: 12px; z-index: 65;
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px; border: 1px dashed var(--line-hi);
+    background: rgba(10,10,10,.9); backdrop-filter: blur(6px);
+  }
+  .proto span {
+    font-family: var(--mono); font-size: 9px; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--mute-2); padding: 0 6px;
+  }
+  .proto button {
+    appearance: none; cursor: pointer; background: none; border: 1px solid var(--line);
+    color: var(--mute); font-family: var(--mono); font-size: 10px; padding: 5px 9px; white-space: nowrap;
+  }
+  .proto button[aria-pressed="true"] { border-color: var(--green); color: var(--green); }
+  .proto button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+
+  @media (max-width: 359px) { :root { --d-3: 44px; --d-1: 26px; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="glow"></div>
+<div class="grain"></div>
+
+<div class="shell" id="app" data-state="active">
+
+  <header class="top">
+    <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+      <rect width="64" height="64" rx="18" fill="#111511"></rect>
+      <path d="M20 13 V49" stroke="#F7F3EA" stroke-width="12.5" stroke-linecap="round"></path>
+      <path d="M20 35 A12 12 0 0 1 44 35 V49" stroke="#F7F3EA" stroke-width="12.5" stroke-linecap="round" fill="none"></path>
+      <circle cx="48" cy="16" r="7" fill="#22C55E"></circle>
+    </svg>
+    <div class="wordmark">Han <span>VPN</span></div>
+    <div class="eyebrow"><i class="beacon"></i><i id="beaconText">подключено</i></div>
+  </header>
+
+  <!-- ── Статус ─────────────────────────────────── -->
+  <section class="sec" aria-labelledby="statusHead">
+    <div class="cmd"><b>$</b><span id="statusCmd">han --status</span></div>
+
+    <h1 class="display" id="statusHead">
+      <span id="headTop">Подписка</span>
+      <span class="hi" id="headBottom">активна</span>
+    </h1>
+
+    <p class="note">
+      <span class="arrow">&gt;</span>
+      <span id="statusNote">Безлимит · 15+ стран</span>
+      <i class="caret" aria-hidden="true"></i>
+    </p>
+
+    <div class="rail">
+      <div class="track"><div class="fill" id="railFill" style="--pct:100%"></div></div>
+      <div class="val" id="railVal">∞</div>
+    </div>
+
+    <div id="renewSlot"></div>
+
+  </section>
+
+  <!-- ── Установка ──────────────────────────────── -->
+  <section class="sec" id="install" aria-label="Подключение">
+    <button class="linkish" id="showConnect" type="button">настроить подключение на устройстве</button>
+
+    <div class="prog" id="prog">
+      <div class="prog-bar" aria-hidden="true"><i></i><i></i></div>
+      <div class="prog-txt" id="progTxt">Шаг 1 из 2</div>
+    </div>
+
+    <!-- Единственное место, где живут шаги. Рисуется скриптом: на экране
+         всегда одна главная кнопка, запасные пути — тихими ссылками. -->
+    <div id="wiz" aria-live="polite"></div>
+  </section>
+
+</div>
+
+<!-- Шторка выбора: устройство или приложение -->
+<div class="sheet-bg" id="sheetBg">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <h3 id="sheetTitle">Устройство</h3>
+    <div class="grid" id="sheetGrid"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- Панель состояний прототипа — в продакшене удаляется целиком -->
+<div class="proto" role="group" aria-label="Состояния прототипа">
+  <span>Демо</span>
+  <button type="button" data-set="active" aria-pressed="true">активна</button>
+  <button type="button" data-set="soon" aria-pressed="false">10 часов</button>
+  <button type="button" data-set="off" aria-pressed="false">отключена</button>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) { tg.ready(); tg.expand(); try { tg.setHeaderColor('#0A0A0A'); tg.setBackgroundColor('#0A0A0A'); } catch (e) {} }
+  const buzz = (kind) => { try { tg.HapticFeedback.impactOccurred(kind || 'light'); } catch (e) {} };
+
+  const $ = (id) => document.getElementById(id);
+  const app = $('app');
+
+  /* ── Данные подписки ────────────────────────────
+     В бою приходят с бэка; здесь три состояния для показа. */
+  const SUB_LINK = 'https://sub.hanvpn.app/user_000000000';
+
+  /* Даты приходят с бэка как ISO; здесь показаны уже готовыми строками.
+     Особый случай: бессрочная подписка — вместо даты «Бессрочная», вместо
+     остатка «∞». Иначе на экране снова появится «до 12 августа 2109». */
+  const STATES = {
+    active: {
+      beacon: 'активна', cmd: 'han --status',
+      top: 'Подписка', bottom: 'активна',
+      note: 'Действует до 14 декабря 2026', pct: 55, val: '101 день',
+      renew: null
+    },
+    soon: {
+      beacon: 'истекает', cmd: 'han --expires',
+      top: 'Осталось', bottom: '10 часов',
+      note: 'Отключится сегодня в 21:40', pct: 8, val: '10:00',
+      renew: { label: 'Продлить подписку', cls: 'btn-solid' }
+    },
+    off: {
+      beacon: 'истекла', cmd: 'han --status',
+      top: 'VPN', bottom: 'отключен',
+      note: 'Подписка закончилась 2 сентября', pct: 6, val: 'offline',
+      renew: { label: 'Продлить подписку', cls: 'btn-alarm' }
+    }
+  };
+
+  let statusName = 'active';
+
+  function paintState(name) {
+    const s = STATES[name];
+    statusName = name;
+    app.dataset.state = name;
+    $('beaconText').textContent = s.beacon;
+    $('statusCmd').textContent = s.cmd;
+    $('headTop').textContent = s.top;
+    $('headBottom').textContent = s.bottom;
+    $('statusNote').textContent = s.note;
+    $('railFill').style.setProperty('--pct', s.pct + '%');
+    $('railVal').textContent = s.val;
+
+    app.removeAttribute('data-connect-open');
+    paintRenew();
+  }
+
+  /* Одна сплошная кнопка на экран. Что важнее — зависит от того,
+     настроено ли устройство: без приложения продлевать нечего,
+     с настроенным приложением единственное живое действие — продлить. */
+  function paintRenew() {
+    const s = STATES[statusName];
+    const slot = $('renewSlot');
+    slot.replaceChildren();
+    if (!s.renew) return;
+
+    const leadsHere = statusName === 'off' || state.phase === 'done';
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn ' + (leadsHere ? s.renew.cls : 'btn-ghost');
+    b.style.marginTop = '22px';
+    b.textContent = s.renew.label;
+    b.addEventListener('click', () => { buzz('medium'); toast('Открываем оплату в боте'); });
+    slot.appendChild(b);
+  }
+
+  /* ── Устройство и приложение ────────────────────
+     Устройство определяем сами и называем его прямо в тексте шага —
+     отдельная строка-селектор больше не нужна. `finish` — то, что
+     человек делает уже вне мини-аппы, после скачивания. */
+  const DEVICES = {
+    ios:     { short: 'iPhone',  app: 'Happ', get: 'Открыть App Store',
+               what: 'бесплатное приложение из App Store',
+               finish: 'Нажмите «Загрузить» и дождитесь, пока приложение установится.' },
+    android: { short: 'Android', app: 'Happ', get: 'Скачать Happ',
+               what: 'приложение для Android 8 и новее',
+               finish: 'Откройте скачанный файл и разрешите установку, если телефон спросит.' },
+    macos:   { short: 'macOS',   app: 'INCY', get: 'Скачать INCY',
+               what: 'приложение для Mac',
+               finish: 'Откройте скачанный файл и перетащите приложение в папку «Программы».' },
+    windows: { short: 'Windows', app: 'INCY', get: 'Скачать INCY',
+               what: 'приложение для Windows 10 и 11',
+               finish: 'Откройте скачанный файл и пройдите установку до конца.' },
+    linux:   { short: 'Linux',   app: 'INCY', get: 'Скачать INCY',
+               what: 'сборка AppImage для x86-64',
+               finish: 'Разрешите файлу запускаться и откройте его.' },
+    tv:      { short: 'TV',      app: 'Happ', get: 'Скачать Happ',
+               what: 'приложение для Android TV',
+               finish: 'Откройте скачанный файл через файловый менеджер и разрешите установку.' }
+  };
+
+  const state = {
+    device: detectDevice(),
+    arch: 'Apple Silicon',
+    appId: null,       // выбранное вручную приложение: 'INCY' | 'Happ' | 'other'
+    phase: 'install'
+  };
+
+  function detectDevice() {
+    const ua = navigator.userAgent;
+    if (/android/i.test(ua)) return /TV|BRAVIA|AFT/i.test(ua) ? 'tv' : 'android';
+    if (/iPhone|iPad|iPod/i.test(ua)) return 'ios';
+    if (/Mac/i.test(ua)) return 'macos';
+    if (/Win/i.test(ua)) return 'windows';
+    if (/Linux/i.test(ua)) return 'linux';
+    return 'macos';
+  }
+
+  const dev = () => DEVICES[state.device];
+  const currentApp = () => (state.appId && state.appId !== 'other') ? state.appId : dev().app;
+
+  /* ── Сценарий ───────────────────────────────────
+     На экране всегда ровно одна главная кнопка, и её подпись называет
+     то, что сейчас произойдёт. Запасные пути — тихими ссылками под ней.
+     Шаг 1 ставит приложение, шаг 2 отдаёт ему подписку; после каждого
+     выхода из мини-аппы спрашиваем, получилось ли. */
+  const PHASES = {
+    install: {
+      step: 1,
+      title: () => 'Установите ' + currentApp(),
+      text: () => currentApp() + ' — ' + dev().what +
+                  (state.device === 'macos' ? ' на ' + state.arch : '') +
+                  '. Через него и работает VPN.',
+      cta: () => dev().get,
+      run: () => { toast('Открываем загрузку'); go('installed'); },
+      alts: () => [
+        { label: 'у меня уже есть приложение', run: pickApp },
+        state.device === 'macos'
+          ? { label: 'у меня Mac на ' + (state.arch === 'Apple Silicon' ? 'Intel' : 'Apple Silicon'), run: flipArch }
+          : null,
+        { label: 'у меня другое устройство', run: pickDevice }
+      ]
+    },
+
+    installed: {
+      step: 1,
+      title: () => currentApp() + ' установлен?',
+      text: () => dev().finish,
+      cta: () => 'Да, установил',
+      run: () => go('link'),
+      alts: () => [{ label: 'скачать ещё раз', run: () => go('install') }]
+    },
+
+    link: {
+      step: 2,
+      title: () => 'Добавьте подписку',
+      text: () => 'Нажмите — откроется <b>' + currentApp() + '</b>, ключ подставится сам. Вводить ничего не нужно.',
+      cta: () => 'Добавить подписку',
+      run: () => { toast('Открываем ' + currentApp()); go('linked'); },
+      alts: () => [
+        { label: 'скопировать ссылку вручную', run: () => { copy(SUB_LINK, 'Ссылка скопирована'); go('manual'); } },
+        { label: 'назад', run: () => go('install') }
+      ]
+    },
+
+    /* Своё приложение: наш диплинк может не открыться, ведём вручную */
+    manual: {
+      step: 2,
+      title: () => 'Вставьте ссылку в приложение',
+      text: () => 'Ссылка уже скопирована. В приложении найдите «Добавить подписку» или кнопку «+» и вставьте её туда.',
+      cta: () => 'Скопировать ссылку ещё раз',
+      ghost: true,
+      run: () => copy(SUB_LINK, 'Ссылка скопирована'),
+      alts: () => [
+        { label: 'готово, подписка добавилась', run: () => go('done') },
+        { label: 'назад', run: () => go('link') }
+      ]
+    },
+
+    linked: {
+      step: 2,
+      title: () => 'Подписка появилась?',
+      text: () => 'В ' + currentApp() + ' должен появиться список стран.',
+      cta: () => 'Да, всё на месте',
+      run: () => go('done'),
+      alts: () => [{ label: 'ничего не появилось', run: () => go('help') }]
+    },
+
+    help: {
+      step: 2,
+      title: () => 'Сейчас разберёмся',
+      text: () => 'Чаще всего помогает добавить подписку вручную. Если не выйдет — напишите нам, поможем.',
+      cta: () => 'Добавить вручную',
+      run: () => { copy(SUB_LINK, 'Ссылка скопирована'); go('manual'); },
+      alts: () => [
+        { label: 'написать в поддержку', run: () => toast('Открываем чат поддержки') },
+        { label: 'попробовать ещё раз', run: () => go('link') }
+      ]
+    },
+
+    done: {
+      // финал: открыть приложение — удобство, а не главное действие
+      step: 2, complete: true, ok: true, ghost: true,
+      title: () => 'Готово',
+      text: () => 'Откройте <b>' + currentApp() + '</b> и нажмите «Подключить». Дальше приложение работает само.',
+      cta: () => 'Открыть ' + currentApp(),
+      run: () => toast('Открываем ' + currentApp()),
+      alts: () => [{ label: 'настроить заново', run: () => go('install') }]
+    }
+  };
+
+  function go(phase) {
+    state.phase = phase;
+    save();
+    renderWizard();
+    paintRenew();
+    buzz('light');
+  }
+
+  function renderWizard() {
+    const p = PHASES[state.phase] || PHASES.install;
+
+    // индикатор: первый сегмент горит всегда, второй — со второго шага
+    const segs = $('prog').querySelectorAll('.prog-bar i');
+    segs[0].toggleAttribute('data-on', true);
+    segs[1].toggleAttribute('data-on', p.step >= 2);
+    $('progTxt').textContent = p.complete ? 'Подключено' : 'Шаг ' + p.step + ' из 2';
+
+    const step = document.createElement('div');
+    step.className = 'wiz-step';
+
+    const h = document.createElement('h3');
+    h.className = 'wiz-title' + (p.ok ? ' ok' : '');
+    h.textContent = p.title();
+    step.appendChild(h);
+
+    const t = document.createElement('p');
+    t.className = 'wiz-text';
+    t.innerHTML = p.text();
+    step.appendChild(t);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn ' + (p.ghost ? 'btn-ghost' : 'btn-solid');
+    btn.textContent = p.cta();
+    btn.addEventListener('click', () => { buzz('medium'); p.run(); });
+    step.appendChild(btn);
+
+    const alts = p.alts().filter(Boolean);
+    if (alts.length) {
+      const wrap = document.createElement('div');
+      wrap.className = 'wiz-alt';
+      alts.forEach((a) => {
+        const l = document.createElement('button');
+        l.type = 'button';
+        l.className = 'linkish';
+        l.textContent = a.label;
+        l.addEventListener('click', a.run);
+        wrap.appendChild(l);
+      });
+      step.appendChild(wrap);
+    }
+
+    $('wiz').replaceChildren(step);
+  }
+
+  $('showConnect').addEventListener('click', () => {
+    app.setAttribute('data-connect-open', '');
+    buzz('light');
+  });
+
+  /* ── Шторка: одна на выбор устройства и приложения ── */
+  const bg = $('sheetBg');
+  const grid = $('sheetGrid');
+
+  function openSheet(title, items, current, onPick) {
+    $('sheetTitle').textContent = title;
+    grid.replaceChildren();
+    items.forEach((it) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = it.label;
+      b.setAttribute('aria-pressed', String(it.id === current));
+      b.addEventListener('click', () => { closeSheet(); onPick(it.id); });
+      grid.appendChild(b);
+    });
+    bg.setAttribute('data-open', '');
+  }
+  const closeSheet = () => bg.removeAttribute('data-open');
+
+  function pickDevice() {
+    const items = Object.entries(DEVICES).map(([id, d]) => ({ id, label: d.short }));
+    openSheet('Ваше устройство', items, state.device, (id) => {
+      state.device = id;
+      state.appId = null;
+      go('install');
+    });
+  }
+
+  function pickApp() {
+    const items = [
+      { id: 'INCY', label: 'INCY' },
+      { id: 'Happ', label: 'Happ' },
+      { id: 'other', label: 'Другое' }
+    ];
+    openSheet('Какое приложение стоит?', items, state.appId, (id) => {
+      state.appId = id;
+      if (id === 'other') { copy(SUB_LINK, 'Ссылка скопирована'); go('manual'); }
+      else go('link');
+    });
+  }
+
+  function flipArch() {
+    state.arch = state.arch === 'Apple Silicon' ? 'Intel' : 'Apple Silicon';
+    save();
+    renderWizard();
+    toast('Сборка для ' + state.arch);
+  }
+
+  bg.addEventListener('click', (e) => { if (e.target === bg) closeSheet(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
+
+  /* ── Тост и копирование ─────────────────────────── */
+  let toastTimer;
+  function toast(text) {
+    const t = $('toast');
+    t.textContent = text;
+    t.setAttribute('data-show', '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.removeAttribute('data-show'), 1900);
+  }
+  async function copy(text, said) {
+    try { await navigator.clipboard.writeText(text); }
+    catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (err) {}
+      ta.remove();
+    }
+    buzz('light');
+    toast(said);
+  }
+
+  /* Прогресс установки живёт у зрителя, не на сервере */
+  function save() {
+    try { localStorage.setItem('han.setup', JSON.stringify(state)); } catch (e) {}
+  }
+  function load() {
+    try {
+      const raw = localStorage.getItem('han.setup');
+      if (raw) Object.assign(state, JSON.parse(raw));
+    } catch (e) {}
+  }
+
+  /* ── Панель прототипа ───────────────────────────── */
+  document.querySelectorAll('.proto button').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('.proto button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      paintState(b.dataset.set);
+      buzz('light');
+    });
+  });
+
+  load();
+  paintState('active');
+  renderWizard();
+})();
+</script>
+</body>
+</html>
