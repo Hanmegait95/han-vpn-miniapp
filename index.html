@@ -59,7 +59,7 @@
     max-width: var(--shell); margin: 0 auto;
     min-height: 100dvh;
     display: flex; flex-direction: column;
-    padding-bottom: 178px;  /* панель главного действия + демо-панель */
+    padding-bottom: 260px;  /* кнопка главного действия + панель прототипа */
   }
 
   /* ── Шапка ─────────────────────────────────────── */
@@ -245,26 +245,102 @@
   .dots i:nth-child(3) { animation-delay: .3s; }
   @keyframes blip { 0%, 60%, 100% { opacity: .25; } 30% { opacity: 1; } }
 
-  /* ── Панель прототипа (в проде удаляется) ──────── */
+  /* ── Оболочка прототипа ────────────────────────
+     На телефоне обёртки прозрачны (display: contents) — приложение
+     занимает весь экран, как настоящая мини-апка. На большом экране
+     то же самое въезжает в корпус: `transform` на .device делает
+     position:fixed внутри локальным, поэтому нижняя панель, шторка
+     и тосты остаются в границах «телефона». */
+  .stage, .device, .scroll { display: contents; }
+
   .proto {
     position: fixed; left: 50%; transform: translateX(-50%);
-    bottom: 88px; z-index: 65;
-    display: flex; flex-direction: column; gap: 5px;
-    padding: 7px; border: 1px dashed var(--line-hi);
-    background: rgba(10,10,10,.92); backdrop-filter: blur(6px);
+    bottom: 92px; z-index: 65; width: calc(100% - 24px); max-width: 396px;
+    border: 1px dashed var(--line-hi);
+    background: rgba(10,10,10,.94); backdrop-filter: blur(8px);
   }
-  .proto-row { display: flex; align-items: center; gap: 5px; }
-  .proto span {
-    font-family: var(--mono); font-size: 9px; letter-spacing: .18em;
-    text-transform: uppercase; color: var(--mute-2); padding: 0 6px;
-    width: 74px; flex: none;
+  .proto-toggle {
+    appearance: none; width: 100%; cursor: pointer;
+    background: none; border: 0; padding: 9px 12px; text-align: left;
+    font-family: var(--mono); font-size: 10px; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--mute);
   }
-  .proto button {
+  .proto-toggle::after { content: ' ⌄'; }
+  .proto[data-open] .proto-toggle::after { content: ' ⌃'; }
+  .proto-toggle:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+
+  .proto-body { display: none; padding: 0 12px 12px; }
+  .proto[data-open] .proto-body { display: block; }
+  .proto-title, .proto-lead, .proto-note { display: none; }  /* на телефоне места нет */
+
+  .proto-group { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .proto-label {
+    font-family: var(--mono); font-size: 9px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--mute-2); width: 74px; flex: none;
+  }
+  .proto-row { display: flex; gap: 5px; flex-wrap: wrap; }
+  .proto button[data-set], .proto button[data-dev] {
     appearance: none; cursor: pointer; background: none; border: 1px solid var(--line);
-    color: var(--mute); font-family: var(--mono); font-size: 10px; padding: 5px 9px; white-space: nowrap;
+    color: var(--mute); font-family: var(--mono); font-size: 10px;
+    padding: 5px 9px; white-space: nowrap;
   }
   .proto button[aria-pressed="true"] { border-color: var(--green); color: var(--green); }
   .proto button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+
+  .proto-reset {
+    appearance: none; cursor: pointer; margin-top: 12px;
+    background: none; border: 1px solid var(--line-hi); color: var(--mute);
+    font-family: var(--mono); font-size: 11px; padding: 8px 12px;
+  }
+  .proto-reset:hover { border-color: var(--green-dim); color: var(--cream); }
+
+  /* ── Большой экран: корпус телефона + колонка ──── */
+  @media (min-width: 940px) {
+    body {
+      min-height: 100dvh; padding: 40px 24px;
+      background:
+        radial-gradient(90% 60% at 50% -10%, rgba(34,197,94,.07), transparent 60%),
+        #060807;
+    }
+    .stage {
+      display: flex; align-items: center; justify-content: center;
+      gap: 56px; flex-wrap: wrap; min-height: calc(100dvh - 80px);
+    }
+
+    .device {
+      display: block; position: relative;
+      transform: translate(0);              /* локализует position:fixed внутри */
+      width: 390px; height: 812px; flex: none;
+      background: var(--ink); overflow: hidden;
+      border-radius: 40px;
+      box-shadow: 0 0 0 11px #131714, 0 0 0 12px #2b342d, 0 44px 100px rgba(0,0,0,.65);
+    }
+    .scroll {
+      display: block; position: absolute; inset: 0;
+      overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+    }
+    .shell { min-height: 812px; padding-bottom: 120px; }
+
+    /* панель уезжает из-под экрана в колонку рядом */
+    .proto {
+      position: static; transform: none; width: 320px; max-width: 320px;
+      background: none; backdrop-filter: none; border: 0;
+      border-left: 1px solid var(--line); padding-left: 28px;
+    }
+    .proto-toggle { display: none; }
+    .proto-body { display: block; padding: 0; }
+    .proto-title, .proto-lead, .proto-note { display: block; }
+    .proto-title {
+      margin: 0; font-size: 26px; font-weight: 900; letter-spacing: -.03em;
+      text-transform: uppercase; line-height: .95;
+    }
+    .proto-lead, .proto-note {
+      margin: 12px 0 0; font-size: 13px; line-height: 1.55; color: var(--mute);
+    }
+    .proto-note { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12px; }
+    .proto-group { margin-top: 14px; }
+    .proto-group:first-of-type { margin-top: 24px; }
+  }
 
   @media (max-width: 359px) { :root { --d-3: 44px; --d-1: 26px; } }
 
@@ -275,8 +351,11 @@
 </head>
 <body>
 
+<div class="stage">
+<div class="device">
 <div class="glow"></div>
 <div class="grain"></div>
+<div class="scroll">
 
 <div class="shell" id="app" data-state="active">
 
@@ -288,7 +367,7 @@
       <circle cx="48" cy="16" r="7" fill="#22C55E"></circle>
     </svg>
     <div class="wordmark">Han <span>VPN</span></div>
-    <div class="eyebrow"><i class="beacon"></i><i id="beaconText">подключено</i></div>
+    <div class="eyebrow"><i class="beacon"></i><i id="beaconText">активна</i></div>
   </header>
 
   <!-- ── Статус ─────────────────────────────────── -->
@@ -302,13 +381,13 @@
 
     <p class="note">
       <span class="arrow">&gt;</span>
-      <span id="statusNote">Безлимит · 15+ стран</span>
+      <span id="statusNote">Действует до 14 декабря 2026</span>
       <i class="caret" aria-hidden="true"></i>
     </p>
 
     <div class="rail">
-      <div class="track"><div class="fill" id="railFill" style="--pct:100%"></div></div>
-      <div class="val" id="railVal">∞</div>
+      <div class="track"><div class="fill" id="railFill" style="--pct:55%"></div></div>
+      <div class="val" id="railVal">101 день</div>
     </div>
 
     <div id="renewSlot"></div>
@@ -332,6 +411,8 @@
 </div>
 
 <!-- Шторка выбора: устройство или приложение -->
+</div><!-- /scroll -->
+
 <div class="sheet-bg" id="sheetBg">
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
     <h3 id="sheetTitle">Устройство</h3>
@@ -345,19 +426,47 @@
 <div class="mainbar" id="mainbar"></div>
 
 <!-- Панель прототипа — в продакшене удаляется целиком -->
-<div class="proto" role="group" aria-label="Состояния прототипа">
-  <div class="proto-row">
-    <span>Подписка</span>
-    <button type="button" data-set="active" aria-pressed="true">активна</button>
-    <button type="button" data-set="soon" aria-pressed="false">10 часов</button>
-    <button type="button" data-set="off" aria-pressed="false">истекла</button>
+</div><!-- /device -->
+
+<!-- Панель прототипа. На телефоне — свёрнутая плашка снизу,
+     на большом экране — колонка рядом с корпусом. -->
+<aside class="proto" id="proto" data-open>
+  <button class="proto-toggle" id="protoToggle" type="button" aria-expanded="true">Прототип</button>
+
+  <div class="proto-body">
+    <h2 class="proto-title">Прототип мини-аппы</h2>
+    <p class="proto-lead">
+      Экран подписки Han VPN. Данные вымышленные, кнопки никуда не ведут —
+      переключайте состояния и проходите подключение, оно работает целиком.
+    </p>
+
+    <div class="proto-group">
+      <span class="proto-label">Подписка</span>
+      <div class="proto-row">
+        <button type="button" data-set="active" aria-pressed="true">активна</button>
+        <button type="button" data-set="soon" aria-pressed="false">10 часов</button>
+        <button type="button" data-set="off" aria-pressed="false">истекла</button>
+      </div>
+    </div>
+
+    <div class="proto-group">
+      <span class="proto-label">Устройство</span>
+      <div class="proto-row">
+        <button type="button" data-dev="new" aria-pressed="true">не настроено</button>
+        <button type="button" data-dev="ready" aria-pressed="false">уже настроено</button>
+      </div>
+    </div>
+
+    <button class="proto-reset" id="protoReset" type="button">Начать заново</button>
+
+    <p class="proto-note">
+      «Уже настроено» — как экран открывается у того, кто всё поставил раньше:
+      мастер не показывается вовсе. Ссылка запоминает выбранное состояние —
+      можно скинуть коллеге сразу нужный экран.
+    </p>
   </div>
-  <div class="proto-row">
-    <span>Устройство</span>
-    <button type="button" data-dev="new" aria-pressed="true">не настроено</button>
-    <button type="button" data-dev="ready" aria-pressed="false">уже настроено</button>
-  </div>
-</div>
+</aside>
+</div><!-- /stage -->
 
 <script>
 (() => {
@@ -861,24 +970,69 @@
     });
   }
 
-  /* ── Панель прототипа ───────────────────────────── */
+  /* ── Панель прототипа ─────────────────────────────
+     Состояние живёт в адресе: #soon, #off, #ready — можно скинуть
+     ссылку сразу на нужный экран. */
+  const protoEl = $('proto');
+
+  $('protoToggle').addEventListener('click', () => {
+    const open = protoEl.toggleAttribute('data-open');
+    $('protoToggle').setAttribute('aria-expanded', String(open));
+  });
+
+  function markChips() {
+    document.querySelectorAll('.proto button[data-set]').forEach(
+      (x) => x.setAttribute('aria-pressed', String(x.dataset.set === demo.state)));
+    const ready = !!demo.fetchedAt;
+    document.querySelectorAll('.proto button[data-dev]').forEach(
+      (x) => x.setAttribute('aria-pressed', String((x.dataset.dev === 'ready') === ready)));
+  }
+
+  function writeHash() {
+    const bits = [];
+    if (demo.state !== 'active') bits.push(demo.state);
+    if (demo.fetchedAt) bits.push('ready');
+    const h = bits.length ? '#' + bits.join('-') : ' ';
+    history.replaceState(null, '', location.pathname + location.search + (bits.length ? h : ''));
+  }
+
+  function readHash() {
+    const h = location.hash.replace('#', '').split('-');
+    if (h.includes('soon')) demo.state = 'soon';
+    if (h.includes('off')) demo.state = 'off';
+    if (h.includes('ready')) demo.fetchedAt = Date.now() - 120000;
+  }
+
   document.querySelectorAll('.proto button[data-set]').forEach((b) => {
     b.addEventListener('click', () => {
-      document.querySelectorAll('.proto button[data-set]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
       demo.state = b.dataset.set;
+      markChips(); writeHash();
       paintState(demo.state);
       buzz('light');
     });
   });
+
   document.querySelectorAll('.proto button[data-dev]').forEach((b) => {
     b.addEventListener('click', async () => {
-      document.querySelectorAll('.proto button[data-dev]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
       stopWatch();
       demo.fetchedAt = b.dataset.dev === 'ready' ? Date.now() - 120000 : null;
       state.phase = 'install';
+      markChips(); writeHash();
       await boot();
       buzz('light');
     });
+  });
+
+  $('protoReset').addEventListener('click', async () => {
+    stopWatch();
+    try { localStorage.removeItem(KEY); } catch (e) {}
+    const cs = cloud(); if (cs) cs.removeItem(KEY, () => {});
+    demo.state = 'active';
+    demo.fetchedAt = null;
+    Object.assign(state, { device: detectDevice(), arch: 'Apple Silicon', appId: null, phase: 'install' });
+    markChips(); writeHash();
+    await boot();
+    toast('Прототип сброшен');
   });
 
   /* ── Старт ──────────────────────────────────────
@@ -905,6 +1059,19 @@
     });
   }
 
+  // ссылку со #soon / #off / #ready можно вставить в адрес на лету
+  window.addEventListener('hashchange', () => {
+    stopWatch();
+    demo.fetchedAt = null;
+    demo.state = 'active';
+    state.phase = 'install';
+    readHash();
+    markChips();
+    boot();
+  });
+
+  readHash();
+  markChips();
   boot();
 })();
 </script>
