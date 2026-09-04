@@ -1,0 +1,10 @@
+# Han VPN — прототип мини-аппы
+
+# Telegram Web открывает мини-аппы в iframe. Если на сайте появится
+# X-Frame-Options: SAMEORIGIN, он бы это заблокировал — снимаем здесь.
+<IfModule mod_headers.c>
+  Header always unset X-Frame-Options
+</IfModule>
+
+DirectoryIndex index.html
+Options -Indexes
