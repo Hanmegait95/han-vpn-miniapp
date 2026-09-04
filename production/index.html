@@ -1,0 +1,916 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Кабинет Han VPN</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+  /* ───────────────────────────────────────────────
+     Han VPN — токены из промо-исходников
+     GREEN #22c55e · CREAM #F7F3EA · RED #FF2A2A · BG #0A0A0A
+     Archivo 900 (дисплей) + JetBrains Mono (служебный слой)
+     Тема одна и намеренная: чёрный терминал. Все цвета заданы явно.
+     ─────────────────────────────────────────────── */
+  :root {
+    --ink:      #0A0A0A;
+    --ink-2:    #0F1310;   /* поверхность, нейтраль со сдвигом в зелёный */
+    --ink-3:    #141A16;
+    --line:     #1E261F;
+    --line-hi:  #2C3A2F;
+    --cream:    #F7F3EA;
+    --mute:     #7F8C83;
+    --mute-2:   #5A655D;
+    --green:    #22C55E;
+    --green-dim:#137A38;
+    --red:      #FF2A2A;
+    --shell:    420px;
+
+    --t-1: 11px; --t-2: 13px; --t-3: 15px; --t-4: 18px;
+    --d-1: 30px; --d-2: 40px; --d-3: 52px;
+
+    --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: 'Archivo', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+    --ease: cubic-bezier(.2, .7, .3, 1);
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--cream);
+    font-family: var(--sans);
+    font-size: var(--t-3);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* Атмосфера: скан-линии + зелёное свечение сверху — как в баннерах */
+  .grain, .glow { position: fixed; inset: 0; pointer-events: none; z-index: 60; }
+  .grain { background: repeating-linear-gradient(0deg, rgba(247,243,234,.024) 0 1px, transparent 1px 3px); mix-blend-mode: screen; }
+  .glow  { z-index: 0; background: radial-gradient(120% 62% at 50% -12%, rgba(34,197,94,.15), transparent 62%); }
+
+  .shell {
+    position: relative; z-index: 1;
+    max-width: var(--shell); margin: 0 auto;
+    min-height: 100dvh;
+    display: flex; flex-direction: column;
+    padding-bottom: 110px;  /* место под кнопку главного действия */
+  }
+
+  /* ── Шапка ─────────────────────────────────────── */
+  .top {
+    position: sticky; top: 0; z-index: 30;
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 20px 12px;
+    background: linear-gradient(var(--ink) 72%, rgba(10,10,10,0));
+    border-bottom: 1px solid var(--line);
+  }
+  .mark { width: 30px; height: 30px; flex: none; display: block; border-radius: 9px; }
+  .wordmark { font-weight: 800; font-size: var(--t-4); letter-spacing: -.015em; }
+  .wordmark span { color: var(--green); }
+
+  .eyebrow {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 7px;
+    font-family: var(--mono); font-size: var(--t-1); font-weight: 500;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--mute);
+  }
+  .beacon { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px var(--green); }
+  [data-state="off"] .beacon { background: var(--red); box-shadow: 0 0 10px var(--red); animation: pulse 1.6s var(--ease) infinite; }
+  [data-state="off"] .eyebrow { color: var(--red); }
+  @keyframes pulse { 50% { opacity: .25; } }
+
+  /* ── Общий строй секций ────────────────────────── */
+  .sec { padding: 26px 20px; border-bottom: 1px solid var(--line); }
+  .sec:last-of-type { border-bottom: 0; }  /* под последней секцией линии не нужно */
+  .cmd {
+    font-family: var(--mono); font-size: var(--t-2); color: var(--mute);
+    display: flex; gap: 9px; align-items: baseline;
+  }
+  .cmd b { color: var(--green); font-weight: 500; }
+
+  .display {
+    font-weight: 900; font-size: var(--d-3); line-height: .88;
+    letter-spacing: -.045em; text-transform: uppercase;
+    text-wrap: balance; margin: 16px 0 0;
+  }
+  .display .hi { color: var(--green); display: block; }
+  [data-state="off"] .display .hi { color: var(--red); }
+
+  .note {
+    font-family: var(--mono); font-size: var(--t-2); color: var(--mute);
+    margin-top: 14px; display: flex; align-items: center; gap: 8px;
+  }
+  .note .arrow { color: var(--green); }
+  .caret { display: inline-block; width: 8px; height: 15px; background: var(--green); animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: .2; } }
+
+  /* Шкала — прямая цитата из баннеров */
+  .rail { margin-top: 22px; display: flex; align-items: center; gap: 12px; }
+  .rail .track { flex: 1; height: 4px; background: var(--ink-3); overflow: hidden; }
+  .rail .fill {
+    height: 100%; background: var(--green); box-shadow: 0 0 16px rgba(34,197,94,.75);
+    width: var(--pct, 100%); transition: width .5s var(--ease);
+  }
+  [data-state="off"] .rail .fill { background: var(--red); box-shadow: 0 0 16px rgba(255,42,42,.6); }
+  .rail .val {
+    font-family: var(--mono); font-size: var(--t-2); color: var(--mute);
+    font-variant-numeric: tabular-nums; letter-spacing: .04em;
+  }
+  [data-state="off"] .rail .val { color: var(--red); }
+
+  /* ── Кнопки ────────────────────────────────────── */
+  .btn {
+    appearance: none; border: 1px solid transparent; cursor: pointer;
+    font-family: var(--sans); font-weight: 700; font-size: var(--t-3);
+    letter-spacing: -.005em;
+    display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+    padding: 14px 18px; width: 100%; text-decoration: none;
+    transition: transform .12s var(--ease), background .18s var(--ease), border-color .18s var(--ease), color .18s var(--ease);
+  }
+  .btn:active { transform: scale(.985); }
+  .btn:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+
+  .btn-solid { background: var(--green); color: #04140A; }
+  .btn-solid:hover { background: #2ade6c; }
+  .btn-alarm { background: var(--red); color: #fff; }
+  .btn-alarm:hover { background: #ff4444; }
+  .btn-ghost { background: var(--ink-2); border-color: var(--line-hi); color: var(--cream); }
+  .btn-ghost:hover { border-color: var(--green-dim); background: var(--ink-3); }
+  /* Текстовая ссылка-переключатель */
+  .linkish {
+    appearance: none; background: none; border: 0; cursor: pointer; padding: 0;
+    font-family: var(--mono); font-size: var(--t-2); color: var(--mute);
+    border-bottom: 1px dashed var(--line-hi); line-height: 1.35;
+  }
+  .linkish:hover { color: var(--green); border-bottom-color: var(--green-dim); }
+  .linkish:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+
+  /* ── Мастер: на экране всегда ровно одно действие ─
+     Без подписки ставить приложение незачем: мастер сворачивается
+     в тихую строку, чтобы не спорить с кнопкой продления. */
+  #showConnect { display: none; }
+  [data-state="off"]:not([data-connect-open]) #prog,
+  [data-state="off"]:not([data-connect-open]) #wiz { display: none; }
+  [data-state="off"]:not([data-connect-open]) #showConnect { display: block; }
+
+  .prog { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+  .prog-bar { display: flex; gap: 4px; flex: 1; }
+  .prog-bar i { flex: 1; height: 4px; background: var(--ink-3); transition: background .3s var(--ease); }
+  .prog-bar i[data-on] { background: var(--green); box-shadow: 0 0 12px rgba(34,197,94,.55); }
+  .prog-txt {
+    font-family: var(--mono); font-size: var(--t-1); letter-spacing: .16em;
+    text-transform: uppercase; color: var(--mute); white-space: nowrap;
+  }
+
+  .wiz-step { margin-top: 22px; animation: rise .3s var(--ease) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+
+  .wiz-title { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -.025em; line-height: 1.15; text-wrap: balance; }
+  .wiz-title.ok { color: var(--green); text-transform: uppercase; font-weight: 900; font-size: var(--d-1); letter-spacing: -.035em; }
+  .wiz-text { margin: 9px 0 0; font-size: var(--t-3); color: var(--mute); line-height: 1.5; max-width: 34ch; }
+  .wiz-text b { color: var(--cream); font-weight: 600; }
+  .wiz-step > .btn { margin-top: 20px; }
+
+  /* запасные пути — тихие, всегда под главной кнопкой */
+  .wiz-alt { margin-top: 18px; display: flex; flex-direction: column; gap: 13px; align-items: flex-start; }
+
+  /* ── Шторка выбора устройства ──────────────────── */
+  .sheet-bg {
+    position: fixed; inset: 0; z-index: 70;
+    background: rgba(6,8,6,.72); backdrop-filter: blur(3px);
+    opacity: 0; pointer-events: none; transition: opacity .22s var(--ease);
+  }
+  .sheet-bg[data-open] { opacity: 1; pointer-events: auto; }
+  .sheet {
+    position: absolute; left: 50%; bottom: 0; transform: translate(-50%, 100%);
+    width: 100%; max-width: var(--shell);
+    background: var(--ink-2); border-top: 1px solid var(--line-hi);
+    padding: 20px 20px calc(24px + env(safe-area-inset-bottom, 0));
+    transition: transform .28s var(--ease);
+  }
+  .sheet-bg[data-open] .sheet { transform: translate(-50%, 0); }
+  .sheet h3 {
+    margin: 0 0 16px; font-family: var(--mono); font-size: var(--t-1);
+    letter-spacing: .16em; text-transform: uppercase; color: var(--mute); font-weight: 500;
+  }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .grid button {
+    appearance: none; cursor: pointer;
+    background: var(--ink); border: 1px solid var(--line);
+    color: var(--cream); padding: 14px 8px;
+    font-family: var(--mono); font-size: var(--t-2);
+    transition: border-color .18s var(--ease), color .18s var(--ease);
+  }
+  .grid button:hover { border-color: var(--green-dim); }
+  .grid button[aria-pressed="true"] { border-color: var(--green); color: var(--green); }
+  .grid button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+
+  /* ── Тост ──────────────────────────────────────── */
+  .toast {
+    position: fixed; left: 50%; bottom: 68px; z-index: 90;
+    transform: translate(-50%, 18px);
+    background: var(--green); color: #04140A;
+    font-family: var(--mono); font-size: var(--t-2); font-weight: 700;
+    padding: 10px 16px;
+    opacity: 0; pointer-events: none;
+    transition: opacity .2s var(--ease), transform .2s var(--ease);
+  }
+  .toast[data-show] { opacity: 1; transform: translate(-50%, 0); }
+
+  /* ── Главное действие ──────────────────────────
+     В Telegram уезжает в нативную MainButton — она приклеена к низу
+     окна и не уходит при скролле. Вне Telegram (браузер, эта страница)
+     рисуем такую же панель сами, чтобы композиция читалась одинаково. */
+  .mainbar {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: 0; z-index: 50; width: 100%; max-width: var(--shell);
+    padding: 14px 20px calc(14px + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(rgba(10,10,10,0), var(--ink) 42%);
+  }
+  .mainbar[hidden] { display: none; }
+  .mainbar .btn:disabled { cursor: default; opacity: .75; }
+
+  .dots i {
+    display: inline-block; width: 4px; height: 4px; margin-left: 3px;
+    background: currentColor; border-radius: 50%;
+    animation: blip 1.1s var(--ease) infinite;
+  }
+  .dots i:nth-child(2) { animation-delay: .15s; }
+  .dots i:nth-child(3) { animation-delay: .3s; }
+  @keyframes blip { 0%, 60%, 100% { opacity: .25; } 30% { opacity: 1; } }
+
+  @media (max-width: 359px) { :root { --d-3: 44px; --d-1: 26px; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="glow"></div>
+<div class="grain"></div>
+
+<div class="shell" id="app" data-state="active">
+
+  <header class="top">
+    <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+      <rect width="64" height="64" rx="18" fill="#111511"></rect>
+      <path d="M20 13 V49" stroke="#F7F3EA" stroke-width="12.5" stroke-linecap="round"></path>
+      <path d="M20 35 A12 12 0 0 1 44 35 V49" stroke="#F7F3EA" stroke-width="12.5" stroke-linecap="round" fill="none"></path>
+      <circle cx="48" cy="16" r="7" fill="#22C55E"></circle>
+    </svg>
+    <div class="wordmark">Han <span>VPN</span></div>
+    <div class="eyebrow"><i class="beacon"></i><i id="beaconText">активна</i></div>
+  </header>
+
+  <!-- ── Статус ─────────────────────────────────── -->
+  <section class="sec" aria-labelledby="statusHead">
+    <div class="cmd"><b>$</b><span id="statusCmd">han --status</span></div>
+
+    <h1 class="display" id="statusHead">
+      <span id="headTop">Подписка</span>
+      <span class="hi" id="headBottom">активна</span>
+    </h1>
+
+    <p class="note">
+      <span class="arrow">&gt;</span>
+      <span id="statusNote">Действует до 14 декабря 2026</span>
+      <i class="caret" aria-hidden="true"></i>
+    </p>
+
+    <div class="rail">
+      <div class="track"><div class="fill" id="railFill" style="--pct:55%"></div></div>
+      <div class="val" id="railVal">101 день</div>
+    </div>
+
+    <div id="renewSlot"></div>
+
+  </section>
+
+  <!-- ── Установка ──────────────────────────────── -->
+  <section class="sec" id="install" aria-label="Подключение">
+    <button class="linkish" id="showConnect" type="button">настроить подключение на устройстве</button>
+
+    <div class="prog" id="prog">
+      <div class="prog-bar" aria-hidden="true"><i></i><i></i></div>
+      <div class="prog-txt" id="progTxt">Шаг 1 из 2</div>
+    </div>
+
+    <!-- Единственное место, где живут шаги. Рисуется скриптом: на экране
+         всегда одна главная кнопка, запасные пути — тихими ссылками. -->
+    <div id="wiz" aria-live="polite"></div>
+  </section>
+
+</div>
+
+<!-- Шторка выбора: устройство или приложение -->
+
+<div class="sheet-bg" id="sheetBg">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <h3 id="sheetTitle">Устройство</h3>
+    <div class="grid" id="sheetGrid"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- Главное действие. В Telegram скрывается: его роль играет MainButton. -->
+<div class="mainbar" id="mainbar"></div>
+
+<!-- Панель прототипа — в продакшене удаляется целиком -->
+
+<!-- Панель прототипа. На телефоне — свёрнутая плашка снизу,
+     на большом экране — колонка рядом с корпусом. -->
+<script>
+(() => {
+  'use strict';
+
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) {
+    tg.ready(); tg.expand();
+    try { tg.setHeaderColor('#0A0A0A'); tg.setBackgroundColor('#0A0A0A'); } catch (e) {}
+  }
+  const has = (ver) => !!(tg && tg.isVersionAtLeast && tg.isVersionAtLeast(ver));
+  const buzz = (k) => { try { tg.HapticFeedback.impactOccurred(k || 'light'); } catch (e) {} };
+  const cheer = () => { try { tg.HapticFeedback.notificationOccurred('success'); } catch (e) {} };
+
+  const $ = (id) => document.getElementById(id);
+  const app = $('app');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /* Наружу — только через Telegram: из вебвью прямой переход по схеме
+     вроде happ:// обычно не срабатывает. Ссылка должна быть https на
+     наш домен, а редирект на схему делает уже внешний браузер. */
+  function openExternal(url) {
+    if (tg && tg.openLink) tg.openLink(url);
+    else window.open(url, '_blank', 'noopener');
+  }
+
+  /* ── Бэкенд ─────────────────────────────────────
+     Один запрос. Авторизация — подписанным initData из Telegram;
+     проверять подпись обязательно на сервере, идентификатор из тела
+     запроса брать нельзя.
+
+     Ответ:
+       { expires_at:        ISO,            // когда заканчивается
+         unlimited:         bool,           // бессрочная — вместо даты «Бессрочная»
+         period_days:       number,         // длина оплаченного периода, для шкалы
+         subscription_url:  string,         // ссылка подписки
+         config_fetched_at: ISO | null,     // когда клиент забрал конфиг
+         last_client:       string | null } // чем забрали, из user-agent
+
+     config_fetched_at — то, на чём держится весь мастер: мини-апка не
+     наблюдает за приложением (в вебвью Telegram это ненадёжно), она
+     спрашивает сервер, забрали ли подписку. */
+
+  const API_URL       = '/miniapp/status';                                  // TODO: свой адрес
+  const DOWNLOAD_URL  = (device) => 'https://example.com/download/' + device; // TODO
+  const OPEN_APP_URL  = (app) => 'https://example.com/open/' + app;           // TODO
+
+  let SUB_LINK = '';   // приходит с бэка вместе со статусом
+
+  async function fetchStatus() {
+    const res = await fetch(API_URL, {
+      cache: 'no-store',
+      headers: { 'X-Telegram-Init-Data': (tg && tg.initData) || '' }
+    });
+    if (!res.ok) throw new Error('status ' + res.status);
+    return res.json();
+  }
+
+  /* ── Статус подписки ────────────────────────────
+     Из ответа бэка собирается то, что рисуется в шапке экрана. */
+  const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+                  'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+
+  const fmtDate = (iso) => {
+    const d = new Date(iso);
+    return d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear();
+  };
+
+  const fmtTime = (iso) => {
+    const d = new Date(iso);
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  };
+
+  function plural(n, one, few, many) {
+    const a = Math.abs(n) % 100, b = a % 10;
+    if (a > 10 && a < 20) return many;
+    if (b > 1 && b < 5) return few;
+    return b === 1 ? one : many;
+  }
+
+  const RENEW = { label: 'Продлить подписку', alarm: false };
+
+  function describe(p) {
+    if (p.unlimited) {
+      return { name: 'active', beacon: 'активна', cmd: 'han --status',
+               top: 'Подписка', bottom: 'активна',
+               note: 'Бессрочная', pct: 100, val: '∞', renew: null };
+    }
+
+    const left = new Date(p.expires_at).getTime() - Date.now();
+
+    if (left <= 0) {
+      return { name: 'off', beacon: 'истекла', cmd: 'han --status',
+               top: 'VPN', bottom: 'отключен',
+               note: 'Подписка закончилась ' + fmtDate(p.expires_at),
+               pct: 6, val: 'offline',
+               renew: { label: RENEW.label, alarm: true } };
+    }
+
+    const hours = left / 3600000;
+    const period = (p.period_days || 30) * 86400000;
+    const pct = Math.max(4, Math.min(100, Math.round(left / period * 100)));
+
+    if (hours < 24) {
+      const h = Math.max(1, Math.round(hours));
+      return { name: 'soon', beacon: 'истекает', cmd: 'han --expires',
+               top: 'Осталось', bottom: h + ' ' + plural(h, 'час', 'часа', 'часов'),
+               note: 'Отключится в ' + fmtTime(p.expires_at),
+               pct, val: fmtTime(p.expires_at),
+               renew: { label: RENEW.label, alarm: false } };
+    }
+
+    const d = Math.round(hours / 24);
+    return { name: 'active', beacon: 'активна', cmd: 'han --status',
+             top: 'Подписка', bottom: 'активна',
+             note: 'Действует до ' + fmtDate(p.expires_at),
+             pct, val: d + ' ' + plural(d, 'день', 'дня', 'дней'),
+             renew: null };
+  }
+
+  let status = null;      // последний describe()
+  let lastClient = null;
+
+  function paintState(view) {
+    status = view;
+    app.dataset.state = view.name;
+    $('beaconText').textContent = view.beacon;
+    $('statusCmd').textContent = view.cmd;
+    $('headTop').textContent = view.top;
+    $('headBottom').textContent = view.bottom;
+    $('statusNote').textContent = view.note;
+    $('railFill').style.setProperty('--pct', view.pct + '%');
+    $('railVal').textContent = view.val;
+    app.removeAttribute('data-connect-open');
+    paint();
+  }
+
+  /* TODO: оплата. Внутри мини-аппы это tg.openInvoice(url, cb),
+     ссылку на счёт выдаёт бэк. Пока — переход в бота. */
+  const renew = () => { buzz('medium'); toast('Открываем оплату'); };
+
+  /* ── Устройство и приложение ──────────────────── */
+  const DEVICES = {
+    ios:     { short: 'iPhone',  app: 'Happ', get: 'Открыть App Store',
+               what: 'бесплатное приложение из App Store',
+               finish: 'Нажмите «Загрузить» и дождитесь, пока приложение установится.' },
+    android: { short: 'Android', app: 'Happ', get: 'Скачать Happ',
+               what: 'приложение для Android 8 и новее',
+               finish: 'Откройте скачанный файл и разрешите установку, если телефон спросит.' },
+    macos:   { short: 'macOS',   app: 'INCY', get: 'Скачать INCY',
+               what: 'приложение для Mac',
+               finish: 'Откройте скачанный файл и перетащите приложение в папку «Программы».' },
+    windows: { short: 'Windows', app: 'INCY', get: 'Скачать INCY',
+               what: 'приложение для Windows 10 и 11',
+               finish: 'Откройте скачанный файл и пройдите установку до конца.' },
+    linux:   { short: 'Linux',   app: 'INCY', get: 'Скачать INCY',
+               what: 'сборка AppImage для x86-64',
+               finish: 'Разрешите файлу запускаться и откройте его.' },
+    tv:      { short: 'TV',      app: 'Happ', get: 'Скачать Happ',
+               what: 'приложение для Android TV',
+               finish: 'Откройте скачанный файл через файловый менеджер и разрешите установку.' }
+  };
+
+  const state = { device: detectDevice(), arch: 'Apple Silicon', appId: null, phase: 'install' };
+
+  function detectDevice() {
+    const ua = navigator.userAgent;
+    if (/android/i.test(ua)) return /TV|BRAVIA|AFT/i.test(ua) ? 'tv' : 'android';
+    if (/iPhone|iPad|iPod/i.test(ua)) return 'ios';
+    if (/Mac/i.test(ua)) return 'macos';
+    if (/Win/i.test(ua)) return 'windows';
+    if (/Linux/i.test(ua)) return 'linux';
+    return 'macos';
+  }
+
+  const dev = () => DEVICES[state.device];
+  const currentApp = () => (state.appId && state.appId !== 'other') ? state.appId : dev().app;
+
+  /* ── Сценарий ───────────────────────────────────
+     Вопросов пользователю больше нет — ни «установили?», ни «появилась
+     подписка?». Осталась инструкция и ожидание, которое закрывает бэк.
+     Экраны-развилки нужны только когда сервер ничего не увидел. */
+  const PHASES = {
+    install: {
+      step: 1,
+      title: () => 'Установите ' + currentApp(),
+      text: () => currentApp() + ' — ' + dev().what +
+                  (state.device === 'macos' ? ' на ' + state.arch : '') +
+                  '. Через него и работает VPN.',
+      cta: () => dev().get,
+      run: () => { openExternal(DOWNLOAD_URL(state.device)); go('installed'); },
+      alts: () => [
+        { label: 'у меня уже есть приложение', run: pickApp },
+        state.device === 'macos'
+          ? { label: 'у меня Mac на ' + (state.arch === 'Apple Silicon' ? 'Intel' : 'Apple Silicon'), run: flipArch }
+          : null,
+        { label: 'у меня другое устройство', run: pickDevice }
+      ]
+    },
+
+    installed: {
+      step: 1, back: 'install',
+      title: () => 'Завершите установку',
+      text: () => dev().finish,
+      cta: () => 'Готово, дальше',
+      run: () => go('link')
+    },
+
+    link: {
+      step: 2, back: 'install',
+      title: () => 'Добавьте подписку',
+      text: () => 'Нажмите — откроется <b>' + currentApp() + '</b>, ключ подставится сам. Вводить ничего не нужно.',
+      cta: () => 'Добавить подписку',
+      run: () => {
+        openExternal(SUB_LINK);
+        go('checking');
+      },
+      alts: () => [{ label: 'добавить вручную', run: toManual }]
+    },
+
+    checking: {
+      step: 2, busy: true,
+      title: () => 'Проверяем подключение',
+      text: () => 'Добавьте подписку в <b>' + currentApp() + '</b> — мы увидим это сами, возвращаться сюда не нужно.',
+      cta: () => 'Проверяем',
+      run: () => {},
+      alts: () => [
+        { label: 'приложение не открылось', run: () => go('notfound') },
+        { label: 'добавить вручную', run: toManual }
+      ]
+    },
+
+    notfound: {
+      step: 2, back: 'link',
+      title: () => 'Пока не видим подписку',
+      text: () => 'Мы не увидели, чтобы ' + currentApp() + ' забрал её. Чаще всего помогает добавить ссылку вручную.',
+      cta: () => 'Добавить вручную',
+      run: toManual,
+      alts: () => [
+        { label: 'попробовать ещё раз', run: () => go('link') },
+        { label: 'написать в поддержку', run: () => toast('Открываем чат поддержки') }
+      ]
+    },
+
+    manual: {
+      step: 2, back: 'link',
+      title: () => 'Вставьте ссылку в приложение',
+      text: () => 'Ссылка уже скопирована. В приложении найдите «Добавить подписку» или кнопку «+» и вставьте её туда.',
+      cta: () => 'Скопировать ещё раз',
+      run: () => { copy(SUB_LINK, 'Ссылка скопирована'); startWatch(); }
+    },
+
+    done: {
+      step: 2, complete: true, ok: true,
+      title: () => 'Готово',
+      text: () => (lastClient ? '<b>' + lastClient + '</b> получил подписку. ' : '') +
+                  'Откройте приложение и нажмите «Подключить» — дальше оно работает само.',
+      secondary: () => 'Открыть ' + currentApp(),
+      run: () => openExternal(OPEN_APP_URL(currentApp().toLowerCase())),
+      alts: () => [{ label: 'настроить другое устройство', run: pickDevice }]
+    }
+  };
+
+  /* ── Ожидание: спрашиваем бэк, а не следим за приложением ──
+     В вебвью Telegram нельзя надёжно поймать возврат из внешнего
+     приложения, и сама мини-апка может перезапуститься. Поэтому
+     единственный источник правды — сервер. */
+  const POLL_EVERY = 2500;
+  const GIVE_UP_AFTER = 30000;
+  let watchTimer = null;
+
+  function stopWatch() { clearTimeout(watchTimer); watchTimer = null; }
+
+  function startWatch() {
+    stopWatch();
+    const until = Date.now() + GIVE_UP_AFTER;
+    const tick = async () => {
+      const st = await API.status();
+      if (st.config_fetched_at) {
+        lastClient = st.last_client;
+        cheer();
+        go('done');
+        return;
+      }
+      if (Date.now() >= until) { go('notfound'); return; }
+      watchTimer = setTimeout(tick, POLL_EVERY);
+    };
+    watchTimer = setTimeout(tick, POLL_EVERY);
+  }
+
+  function go(phase) {
+    if (phase !== 'checking' && phase !== 'manual') stopWatch();
+    state.phase = phase;
+    save();
+    paint();
+    if (phase === 'checking') startWatch();
+    buzz('light');
+  }
+
+  /* ── Отрисовка ──────────────────────────────────
+     paint() — одна точка входа: шаг, главное действие и кнопка
+     продления считаются вместе, чтобы сплошная кнопка была одна. */
+  function paint() {
+    // свёрнутая секция называет своё состояние честно
+    $('showConnect').textContent = state.phase === 'done'
+      ? 'устройство настроено — настроить другое'
+      : 'настроить подключение на устройстве';
+    renderWizard(); paintPrimary(); paintRenew();
+  }
+
+  function wizardHidden() {
+    return !!status && status.name === 'off' && !app.hasAttribute('data-connect-open');
+  }
+
+  function renderWizard() {
+    const p = PHASES[state.phase] || PHASES.install;
+
+    const segs = $('prog').querySelectorAll('.prog-bar i');
+    segs[0].toggleAttribute('data-on', true);
+    segs[1].toggleAttribute('data-on', p.step >= 2);
+    $('progTxt').textContent = p.complete ? 'Подключено' : 'Шаг ' + p.step + ' из 2';
+
+    const step = document.createElement('div');
+    step.className = 'wiz-step';
+
+    const h = document.createElement('h3');
+    h.className = 'wiz-title' + (p.ok ? ' ok' : '');
+    h.textContent = p.title();
+    step.appendChild(h);
+
+    const t = document.createElement('p');
+    t.className = 'wiz-text';
+    t.innerHTML = p.text();
+    step.appendChild(t);
+
+    // вторичное действие живёт в теле шага, главное — в панели снизу
+    if (p.secondary) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn btn-ghost';
+      b.textContent = p.secondary();
+      b.addEventListener('click', () => { buzz('medium'); p.run(); });
+      step.appendChild(b);
+    }
+
+    const alts = (p.alts ? p.alts() : []).filter(Boolean);
+    if (alts.length) {
+      const wrap = document.createElement('div');
+      wrap.className = 'wiz-alt';
+      alts.forEach((a) => {
+        const l = document.createElement('button');
+        l.type = 'button';
+        l.className = 'linkish';
+        l.textContent = a.label;
+        l.addEventListener('click', a.run);
+        wrap.appendChild(l);
+      });
+      step.appendChild(wrap);
+    }
+
+    $('wiz').replaceChildren(step);
+
+    if (tg && tg.BackButton) {
+      if (p.back && !wizardHidden()) tg.BackButton.show(); else tg.BackButton.hide();
+    }
+  }
+
+  /* Ровно одно главное действие на экран. Что именно — зависит от того,
+     настроено ли устройство: без приложения продлевать нечего, с готовым
+     приложением единственное живое действие — продлить. */
+  function currentPrimary() {
+    const s = status;
+    if (wizardHidden()) return { label: s.renew.label, alarm: true, run: s.renew.run || renew };
+
+    const p = PHASES[state.phase];
+    if (state.phase !== 'done') {
+      return { label: p.cta(), busy: !!p.busy, run: p.run };
+    }
+    if (s.renew) return { label: s.renew.label, alarm: s.renew.alarm, run: s.renew.run || renew };
+    return null;   // всё настроено и подписка активна — торопить не с чем
+  }
+
+  let mainHandler = null;
+
+  function paintPrimary() {
+    const act = currentPrimary();
+    const bar = $('mainbar');
+
+    if (tg && tg.MainButton && has('6.1')) {
+      bar.hidden = true;
+      const mb = tg.MainButton;
+      if (mainHandler) { mb.offClick(mainHandler); mainHandler = null; }
+      if (!act) { mb.hide(); return; }
+      mb.setParams({
+        text: act.label,
+        color: act.alarm ? '#FF2A2A' : '#22C55E',
+        text_color: act.alarm ? '#FFFFFF' : '#04140A',
+        is_active: !act.busy
+      });
+      if (act.busy) mb.showProgress(false); else mb.hideProgress();
+      mainHandler = () => { buzz('medium'); act.run(); };
+      mb.onClick(mainHandler);
+      mb.show();
+      return;
+    }
+
+    // вне Telegram рисуем такую же панель сами
+    bar.hidden = !act;
+    bar.replaceChildren();
+    if (!act) return;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn ' + (act.alarm ? 'btn-alarm' : 'btn-solid');
+    b.disabled = !!act.busy;
+    b.textContent = act.label;
+    if (act.busy) {
+      const d = document.createElement('span');
+      d.className = 'dots';
+      d.innerHTML = '<i></i><i></i><i></i>';
+      b.appendChild(d);
+    }
+    b.addEventListener('click', () => { buzz('medium'); act.run(); });
+    bar.appendChild(b);
+  }
+
+  /* Продление показывается в статусе только тогда, когда главное
+     действие занято мастером — иначе оно уже стоит в панели снизу. */
+  function paintRenew() {
+    const s = status;
+    const slot = $('renewSlot');
+    slot.replaceChildren();
+    if (!s.renew || wizardHidden() || state.phase === 'done') return;
+
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn btn-ghost';
+    b.style.marginTop = '22px';
+    b.textContent = s.renew.label;
+    b.addEventListener('click', renew);
+    slot.appendChild(b);
+  }
+
+  /* ── Шторка: устройство или приложение ─────────── */
+  const bg = $('sheetBg');
+  const grid = $('sheetGrid');
+
+  function openSheet(title, items, current, onPick) {
+    $('sheetTitle').textContent = title;
+    grid.replaceChildren();
+    items.forEach((it) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = it.label;
+      b.setAttribute('aria-pressed', String(it.id === current));
+      b.addEventListener('click', () => { closeSheet(); onPick(it.id); });
+      grid.appendChild(b);
+    });
+    bg.setAttribute('data-open', '');
+  }
+  const closeSheet = () => bg.removeAttribute('data-open');
+
+  function pickDevice() {
+    const items = Object.entries(DEVICES).map(([id, d]) => ({ id, label: d.short }));
+    openSheet('Ваше устройство', items, state.device, (id) => {
+      state.device = id; state.appId = null; go('install');
+    });
+  }
+
+  function pickApp() {
+    openSheet('Какое приложение стоит?', [
+      { id: 'INCY', label: 'INCY' },
+      { id: 'Happ', label: 'Happ' },
+      { id: 'other', label: 'Другое' }
+    ], state.appId, (id) => {
+      state.appId = id;
+      if (id === 'other') toManual(); else go('link');
+    });
+  }
+
+  function toManual() {
+    copy(SUB_LINK, 'Ссылка скопирована');
+    go('manual');
+    startWatch();
+  }
+
+  function flipArch() {
+    state.arch = state.arch === 'Apple Silicon' ? 'Intel' : 'Apple Silicon';
+    save(); paint();
+    toast('Сборка для ' + state.arch);
+  }
+
+  bg.addEventListener('click', (e) => { if (e.target === bg) closeSheet(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
+
+  $('showConnect').addEventListener('click', () => {
+    app.setAttribute('data-connect-open', '');
+    paint(); buzz('light');
+  });
+
+  /* ── Тост и копирование ─────────────────────────── */
+  let toastTimer;
+  function toast(text) {
+    const t = $('toast');
+    t.textContent = text;
+    t.setAttribute('data-show', '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.removeAttribute('data-show'), 1900);
+  }
+  async function copy(text, said) {
+    try { await navigator.clipboard.writeText(text); }
+    catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (err) {}
+      ta.remove();
+    }
+    buzz('light');
+    toast(said);
+  }
+
+  /* ── Прогресс мастера ───────────────────────────
+     CloudStorage привязан к пользователю, а не к устройству, и переживает
+     перезапуск мини-аппы после выхода во внешнее приложение. На старых
+     клиентах откатываемся на localStorage. */
+  const KEY = 'han.setup';
+  const cloud = () => (has('6.9') && tg.CloudStorage) ? tg.CloudStorage : null;
+
+  function save() {
+    const raw = JSON.stringify({ device: state.device, arch: state.arch, appId: state.appId, phase: state.phase });
+    const cs = cloud();
+    if (cs) cs.setItem(KEY, raw, () => {});
+    try { localStorage.setItem(KEY, raw); } catch (e) {}
+  }
+
+  function load() {
+    return new Promise((resolve) => {
+      const fromLocal = () => { try { return localStorage.getItem(KEY); } catch (e) { return null; } };
+      const cs = cloud();
+      if (!cs) return resolve(fromLocal());
+      cs.getItem(KEY, (err, val) => resolve(err ? fromLocal() : (val || fromLocal())));
+    });
+  }
+
+  /* ── Старт ──────────────────────────────────────
+     Сначала спрашиваем бэк: если конфиг уже забирали, мастер показывать
+     незачем — открываемся сразу на «Готово». */
+  async function boot() {
+    const raw = await load();
+    if (raw) { try { Object.assign(state, JSON.parse(raw)); } catch (e) {} }
+
+    let payload;
+    try {
+      payload = await fetchStatus();
+    } catch (e) {
+      // Показать ошибку честно и дать повторить — пустой экран хуже.
+      paintState({ name: 'off', beacon: 'нет связи', cmd: 'han --status',
+                   top: 'Не удалось', bottom: 'загрузить',
+                   note: 'Проверьте интернет и попробуйте ещё раз',
+                   pct: 6, val: 'error',
+                   renew: { label: 'Повторить', alarm: false, run: () => boot() } });
+      return;
+    }
+
+    SUB_LINK = payload.subscription_url;
+    if (payload.config_fetched_at) {
+      lastClient = payload.last_client;
+      state.phase = 'done';
+    } else if (state.phase === 'checking') {
+      state.phase = 'link';   // вернулись в середине ожидания — начинаем заново
+    }
+    paintState(describe(payload));
+  }
+
+
+  if (tg && tg.BackButton) {
+    tg.BackButton.onClick(() => {
+      const p = PHASES[state.phase];
+      if (p && p.back) go(p.back);
+    });
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>
