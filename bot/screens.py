@@ -341,15 +341,23 @@ SCREENS = {
     'expiring': {'banner': 'expiring-banner.png',  'caption': expiring_caption, 'buttons': expiring_buttons},
     'expired':  {'banner': 'expired-banner.png',   'caption': expired_caption,  'buttons': expired_buttons},
 
-    'activated': {'banner': 'unlimited-banner.png', 'back': 'home',
+    'activated': {'banner': lambda p: 'ready-banner.png' if p['connected'] else 'unlimited-banner.png',
+                  'back': 'home',
                   'caption': activated_caption, 'buttons': activated_buttons},
+    # Мини-аппа сообщила «подключился» — экран-подтверждение на своём баннере
+    'ready': {'banner': 'ready-banner.png', 'back': 'home',
+              'caption': lambda p: ('🟢 <b>VPN подключён</b>\n\n'
+                                    'Всё работает. Если что-то перестанет — '
+                                    'напишите сюда или нажмите «Помощь» внизу.'
+                                    + ('\n\n<blockquote>%s</blockquote>' % period_line(p) if p['until'] else '')),
+              'buttons': lambda p: [[{'text': '🏠 В кабинет', 'nav': 'home'}]]},
     'tariffs':  {'banner': 'tariffs-banner.png', 'back': 'home',
                  'caption': tariffs_caption, 'buttons': tariffs_buttons},
     'howto':    {'banner': 'howto-banner.png', 'back': 'home',
                  'caption': howto_caption, 'buttons': howto_buttons},
     'referral': {'banner': 'referral-banner.png', 'back': 'home',
                  'caption': referral_caption, 'buttons': referral_buttons},
-    'help':     {'banner': 'support-banner.png', 'back': 'home',
+    'help':     {'banner': 'help-banner.png', 'back': 'home',
                  'caption': help_caption, 'buttons': help_buttons},
     'channel': {
         'banner': 'channel-banner.png', 'back': 'help',

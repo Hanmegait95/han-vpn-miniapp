@@ -134,6 +134,11 @@ def banner_path(name):
     return os.path.join(ASSETS, name)
 
 
+def banner_of(screen, profile):
+    b = screen['banner']
+    return b(profile) if callable(b) else b
+
+
 def banner_id(token, chat_id, name):
     """file_id баннера. Первый раз заливаем черновиком и убираем его."""
     fid = _cache().get(name)
@@ -264,7 +269,7 @@ def send_screen(token, chat_id, name, user, replace_card=False):
     profile = load_profile(user)
     caption = screen['caption'](profile)
     markup = keyboard(screen, profile)
-    banner = screen['banner']
+    banner = banner_of(screen, profile)
 
     fid = _cache().get(banner)
     res = None
@@ -314,7 +319,7 @@ def edit_screen(token, chat_id, message_id, name, user):
     """
     screen = S.SCREENS[name]
     profile = load_profile(user)
-    fid = banner_id(token, chat_id, screen['banner'])
+    fid = banner_id(token, chat_id, banner_of(screen, profile))
     if not fid:
         return None
     return call(token, 'editMessageMedia', {
@@ -509,9 +514,7 @@ def on_web_app_data(token, msg):
     print('  мини-аппа: %s от %s' % (ev, user.get('username') or user['id']))
     if ev == 'connected':
         store.update(user['id'], connected=True)
-        call(token, 'sendMessage', {'chat_id': chat_id,
-             'text': '🟢 Отлично, VPN подключён. Если что-то перестанет работать — напишите сюда.'})
-        show_home(token, chat_id, user)
+        send_screen(token, chat_id, 'ready', user, replace_card=True)
     elif ev == 'failed':
         note = 'Не удалось подключиться (%s, шаг %s)' % (data.get('device', '?'), data.get('phase', '?'))
         opened = open_ticket(token, chat_id, user, note, None)
@@ -737,8 +740,12 @@ def main():
         sys.exit('не удалось подключиться к Bot API')
     BOT_USERNAME = me['username']
 
-    missing = sorted({s['banner'] for s in S.SCREENS.values()
-                      if not os.path.exists(banner_path(s['banner']))})
+    names = set()
+    for sc in S.SCREENS.values():
+        b = sc['banner']
+        names.update([b] if isinstance(b, str) else
+                     [b({'connected': c}) for c in (True, False)])
+    missing = sorted(n for n in names if not os.path.exists(banner_path(n)))
     if missing:
         sys.exit('нет баннеров в assets/: %s' % ', '.join(missing))
 
