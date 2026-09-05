@@ -488,6 +488,17 @@
   /* Наружу — только через Telegram: из вебвью прямой переход по схеме
      вроде happ:// обычно не срабатывает. Ссылка должна быть https на
      наш домен, а редирект на схему делает уже внешний браузер. */
+  /* Открыты из постоянной клавиатуры бота (?src=kb) — значит можем
+     ответить боту через sendData: он узнает, чем кончилось подключение,
+     и сам предложит помощь. Из инлайн-кнопок sendData не работает —
+     тогда этих ссылок просто нет. */
+  const FROM_KB = new URLSearchParams(location.search).get('src') === 'kb'
+                  && !!(tg && tg.sendData);
+  function tellBot(payload) {
+    try { tg.sendData(JSON.stringify(Object.assign({ device: state.device, phase: state.phase }, payload))); }
+    catch (e) {}
+  }
+
   function openExternal(url) {
     if (tg && tg.openLink) tg.openLink(url);
     else window.open(url, '_blank', 'noopener');
@@ -665,7 +676,8 @@
       run: toManual,
       alts: () => [
         { label: 'попробовать ещё раз', run: () => go('link') },
-        { label: 'написать в поддержку', run: () => toast('Открываем чат поддержки') }
+        FROM_KB ? { label: 'не получается — позвать помощь', run: () => tellBot({ event: 'failed' }) }
+                : { label: 'написать в поддержку', run: () => toast('Открываем чат поддержки') }
       ]
     },
 
@@ -674,7 +686,11 @@
       title: () => 'Вставьте ссылку в приложение',
       text: () => 'Ссылка уже скопирована. В приложении найдите «Добавить подписку» или кнопку «+» и вставьте её туда.',
       cta: () => 'Скопировать ещё раз',
-      run: () => { copy(SUB_LINK, 'Ссылка скопирована'); startWatch(); }
+      run: () => { copy(SUB_LINK, 'Ссылка скопирована'); startWatch(); },
+      alts: () => [
+        { label: 'готово, подписка добавилась', run: () => go('done') },
+        FROM_KB ? { label: 'не получается — позвать помощь', run: () => tellBot({ event: 'failed' }) } : null
+      ]
     },
 
     done: {
@@ -684,7 +700,10 @@
                   'Откройте приложение и нажмите «Подключить» — дальше оно работает само.',
       secondary: () => 'Открыть ' + currentApp(),
       run: () => openExternal('https://hanvpn.app/open/' + currentApp().toLowerCase()),
-      alts: () => [{ label: 'настроить другое устройство', run: () => { demo.fetchedAt = null; pickDevice(); } }]
+      alts: () => [
+        FROM_KB ? { label: 'готово — вернуться в бот', run: () => tellBot({ event: 'connected' }) } : null,
+        { label: 'настроить другое устройство', run: () => { demo.fetchedAt = null; pickDevice(); } }
+      ]
     }
   };
 

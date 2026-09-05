@@ -207,8 +207,8 @@ def main():
                      'заглушка ожидания')
     s = must_replace(s, "    demo.fetchedAt = Date.now() + 7000;   // заглушка ручного пути\n", '',
                      'заглушка ручного пути')
-    s = must_replace(s, "      alts: () => [{ label: 'настроить другое устройство', run: () => { demo.fetchedAt = null; pickDevice(); } }]",
-                     "      alts: () => [{ label: 'настроить другое устройство', run: pickDevice }]",
+    s = must_replace(s, "        { label: 'настроить другое устройство', run: () => { demo.fetchedAt = null; pickDevice(); } }",
+                     "        { label: 'настроить другое устройство', run: pickDevice }",
                      'сброс в done')
 
     # якорь берём подлиннее: короткий совпадает раньше, внутри renderWizard

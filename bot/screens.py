@@ -57,7 +57,7 @@ PLATFORMS = [
 BACK = '‹ Назад'
 HOME = '🏠 Кабинет'
 CONNECT = '🔌 Подключить VPN'
-HELP = '❓ Не понятно — помогите'
+HELP = '🆘 Не получается — помогите'
 
 MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
           'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря']
@@ -131,7 +131,7 @@ def welcome_buttons(p):
     return [
         [{'text': '🎁 Включить %d дня бесплатно' % TRIAL_DAYS, 'act': 'trial'}],
         [{'text': '💳 Сколько стоит потом', 'nav': 'tariffs'},
-         {'text': HELP, 'nav': 'support'}],
+         {'text': HELP, 'nav': 'help'}],
     ]
 
 
@@ -154,7 +154,7 @@ def activated_caption(p):
 def activated_buttons(p):
     if not p['connected']:
         return [[{'text': CONNECT, 'web_app': miniapp()}],
-                [{'text': HELP, 'nav': 'support'}]]
+                [{'text': HELP, 'nav': 'help'}]]
     return [[{'text': '🏠 В кабинет', 'nav': 'home'}]]
 
 
@@ -196,7 +196,7 @@ def cabinet_buttons(p):
     rows += [
         [{'text': '🎁 Пригласить друга', 'nav': 'referral'}],
         [{'text': '📘 Как настроить', 'nav': 'howto'},
-         {'text': '❓ Помощь', 'nav': 'info'}],
+         {'text': '❓ Помощь', 'nav': 'help'}],
     ]
     return rows
 
@@ -218,7 +218,7 @@ def expiring_buttons(p):
               'nav': 'tariffs'}]]
     if not p['connected']:
         rows.append([{'text': CONNECT, 'web_app': miniapp()}])
-    rows.append([{'text': '❓ Помощь', 'nav': 'info'}])
+    rows.append([{'text': '❓ Помощь', 'nav': 'help'}])
     return rows
 
 
@@ -240,7 +240,7 @@ def expired_buttons(p):
     return [
         [{'text': '💳 Купить подписку' if p['kind'] == 'trial' else '🛒 Продлить подписку',
           'nav': 'tariffs'}],
-        [{'text': '❓ Помощь', 'nav': 'info'}],
+        [{'text': '❓ Помощь', 'nav': 'help'}],
     ]
 
 
@@ -315,40 +315,22 @@ def referral_buttons(p):
     ]
 
 
-# ── Помощь ─────────────────────────────────────────────────────────
+# ── Помощь: один экран, и писать можно прямо сюда ──────────────────
 
-def info_caption(p):
-    return ('❓ <b>Помощь</b>\n\n'
-            'Выберите, что вас интересует.\n\n'
-            '<blockquote>Если не нашли ответ — нажмите «Написать нам», '
-            'ответит живой человек.</blockquote>')
+def help_caption(p):
+    return ('🆘 <b>Помощь</b>\n\n'
+            '<b>Просто напишите сюда, что случилось</b> — обычным сообщением, '
+            'как другу. Ответит живой человек.\n\n'
+            '<blockquote>Или нажмите, что подходит 👇</blockquote>')
 
 
-def info_buttons(p):
+def help_buttons(p):
     return [
-        [{'text': '🔌 Не работает VPN', 'nav': 'support'}],
-        [{'text': '💳 Сколько стоит', 'nav': 'tariffs'},
+        [{'text': '🔌 Не подключается — покажите ещё раз', 'web_app': miniapp()}],
+        [{'text': '💳 Вопрос по оплате', 'act': 'topic:pay'},
          {'text': '📘 Как настроить', 'nav': 'howto'}],
-        [{'text': '📣 Новости и статус серверов', 'nav': 'channel'}],
-        [{'text': '📄 Документы', 'nav': 'terms'}],
-        [{'text': '✍️ Написать нам', 'url': SUPPORT_URL}],
-    ]
-
-
-def support_caption(p):
-    return ('💬 <b>Поддержка</b>\n\n'
-            'Ответим и поможем с настройкой. '
-            'Выберите, что случилось, или сразу напишите нам.\n\n'
-            '<blockquote>Ваш номер для обращения: <code>%s</code>\n'
-            'Нажмите на него — скопируется.</blockquote>') % p['telegram_id']
-
-
-def support_buttons(p):
-    return [
-        [{'text': '🔌 Не подключается', 'web_app': miniapp()}],
-        [{'text': '💳 Вопрос по оплате', 'url': SUPPORT_URL}],
-        [{'text': '📘 Помогите настроить', 'nav': 'howto'}],
-        [{'text': '✍️ Написать нам', 'url': SUPPORT_URL}],
+        [{'text': '📣 Новости и статус серверов', 'nav': 'channel'},
+         {'text': '📄 Документы', 'nav': 'terms'}],
     ]
 
 
@@ -367,12 +349,10 @@ SCREENS = {
                  'caption': howto_caption, 'buttons': howto_buttons},
     'referral': {'banner': 'referral-banner.png', 'back': 'home',
                  'caption': referral_caption, 'buttons': referral_buttons},
-    'info':     {'banner': 'info-banner.png', 'back': 'home',
-                 'caption': info_caption, 'buttons': info_buttons},
-    'support':  {'banner': 'support-banner.png', 'back': 'info',
-                 'caption': support_caption, 'buttons': support_buttons},
+    'help':     {'banner': 'support-banner.png', 'back': 'home',
+                 'caption': help_caption, 'buttons': help_buttons},
     'channel': {
-        'banner': 'channel-banner.png', 'back': 'info',
+        'banner': 'channel-banner.png', 'back': 'help',
         'caption': lambda p: ('📣 <b>Новости и статус серверов</b>\n\n'
                               'Если VPN вдруг перестал работать — загляните в канал: '
                               'там пишем, что случилось и когда починим.\n\n'
@@ -381,7 +361,7 @@ SCREENS = {
         'buttons': lambda p: [[{'text': '📣 Открыть канал', 'url': CHANNEL_URL}]],
     },
     'terms': {
-        'banner': 'terms-banner.png', 'back': 'info',
+        'banner': 'terms-banner.png', 'back': 'help',
         'caption': lambda p: ('📄 <b>Документы</b>\n\n'
                               'Условия использования и правила обработки данных.\n\n'
                               '<blockquote>Мы не следим, какие сайты вы открываете, '
@@ -393,6 +373,25 @@ for _t in TARIFFS:
     SCREENS['pay:' + _t['id']] = pay_screen(_t)
 
 ROOTS = ('welcome', 'cabinet', 'expiring', 'expired')
+
+# Постоянная клавиатура под полем ввода. Не зависит от того, какая
+# карточка на экране, — «Помощь» в одно нажатие откуда угодно.
+# «Подключить VPN» здесь — KeyboardButton с web_app: только так мини-аппа
+# сможет ответить боту через sendData (из инлайн-кнопок это не работает).
+KB_CONNECT, KB_HOME, KB_HELP = '🔌 Подключить VPN', '🏠 Кабинет', '🆘 Помощь'
+KEYBOARD_VERSION = 2
+
+
+def reply_keyboard():
+    return {
+        'keyboard': [
+            [{'text': KB_CONNECT, 'web_app': {'url': miniapp() + '?src=kb'}}],
+            [{'text': KB_HOME}, {'text': KB_HELP}],
+        ],
+        'resize_keyboard': True,
+        'is_persistent': True,
+        'input_field_placeholder': 'Напишите вопрос — ответит человек',
+    }
 
 
 def home(p):
