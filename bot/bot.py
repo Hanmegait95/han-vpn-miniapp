@@ -14,7 +14,6 @@ import mimetypes
 import os
 import stat
 import sys
-import random
 import threading
 import time
 import urllib.error
@@ -30,20 +29,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, '..', 'assets')
 TOKEN_FILE = os.path.expanduser('~/.config/hanvpn/bot_token')
 CACHE_FILE = os.path.expanduser('~/.config/hanvpn/file_ids.json')
-SUPPORT_FILE = os.path.expanduser('~/.config/hanvpn/support_chat')
-
-# Чат, куда пересылаются обращения. Задаётся один раз командой /admin <код>,
-# код печатается в консоли при старте — чтобы не искать id руками.
-ADMIN_CODE = '%04d' % random.randint(0, 9999)
-
-
-def support_chat():
-    try:
-        return int(open(SUPPORT_FILE, encoding='utf-8').read().strip())
-    except Exception:
-        return None
-
-BOT_USERNAME = None      # заполняется на старте, нужен для реферальной ссылки
 
 
 # ── Bot API ────────────────────────────────────────────────────────
@@ -400,18 +385,6 @@ def act_pay(token, cq, plan_id):
     edit_screen(token, msg['chat']['id'], msg['message_id'], 'activated', user)
 
 
-def act_topic(token, cq, topic):
-    """Кнопка темы в «Помощи»: открываем обращение с готовой темой."""
-    answer(token, cq)
-    user, msg = cq['from'], cq['message']
-    label = {'pay': 'Вопрос по оплате'}.get(topic, 'Вопрос')
-    open_ticket(token, msg['chat']['id'], user, '[%s] — нажата кнопка в «Помощи»' % label, None)
-    call(token, 'sendMessage', {
-        'chat_id': msg['chat']['id'],
-        'text': '✍️ Напишите сюда, что именно с оплатой — мы уже видим ваше обращение и ответим здесь же.',
-    })
-
-
 ACTIONS = {
     'refstats': 'Скоро здесь будет список тех, кто пришёл по вашей ссылке.',
 }
@@ -451,56 +424,7 @@ def on_callback(token, cq):
         act_buy(token, cq, arg); return
     if key == 'pay':
         act_pay(token, cq, arg); return
-    if key == 'topic':
-        act_topic(token, cq, arg); return
     answer(token, cq, ACTIONS.get(key, 'Этот раздел ещё в работе.'), alert=True)
-
-
-# ── Поддержка внутри того же чата ──────────────────────────────────
-# Человек пишет боту как другу. Бот пересылает в чат поддержки вместе
-# с состоянием подписки; ответ (reply на пересланное) уходит обратно.
-
-def state_line(user):
-    p = load_profile(user)
-    kind = {'new': 'без подписки', 'trial': 'бесплатные дни', 'paid': 'оплачено'}[p['kind']]
-    return '%s · %s%s · %s' % (
-        kind, p['phase'] or '—',
-        (' до ' + S.human_date(p['until'])) if p['until'] else '',
-        'подключён' if p['connected'] else 'не подключён')
-
-
-def open_ticket(token, chat_id, user, note, msg):
-    """Переслать обращение в поддержку. Возвращает True, если есть куда."""
-    sc = support_chat()
-    if not sc:
-        return False
-    who = '@' + user['username'] if user.get('username') else (user.get('first_name') or '')
-    header = call(token, 'sendMessage', {
-        'chat_id': sc, 'parse_mode': 'HTML',
-        'text': '🆘 <b>%s</b> · <code>%s</code>\n%s\n%s\n\n<i>Ответьте на это сообщение — уйдёт человеку.</i>'
-                % (S.esc(who), user['id'], S.esc(state_line(user)), S.esc(note)),
-    })
-    fwd = call(token, 'forwardMessage', {
-        'chat_id': sc, 'from_chat_id': chat_id, 'message_id': msg['message_id']}) if msg else None
-    for m in (header, fwd):
-        if m:
-            store.update('ticket:%s' % m['message_id'], user_chat=chat_id, user_id=user['id'])
-    return True
-
-
-def on_support_reply(token, msg):
-    """Сообщение в чате поддержки с reply — копируем человеку."""
-    ref = msg.get('reply_to_message')
-    if not ref:
-        return False
-    t = store.get('ticket:%s' % ref['message_id'])
-    if not t.get('user_chat'):
-        return False
-    call(token, 'copyMessage', {
-        'chat_id': t['user_chat'], 'from_chat_id': msg['chat']['id'],
-        'message_id': msg['message_id']})
-    print('  ответ поддержки → %s' % t['user_id'])
-    return True
 
 
 def on_web_app_data(token, msg):
@@ -516,22 +440,15 @@ def on_web_app_data(token, msg):
         store.update(user['id'], connected=True)
         send_screen(token, chat_id, 'ready', user, replace_card=True)
     elif ev == 'failed':
-        note = 'Не удалось подключиться (%s, шаг %s)' % (data.get('device', '?'), data.get('phase', '?'))
-        opened = open_ticket(token, chat_id, user, note, None)
+        print('    не подключилось: %s, шаг %s' % (data.get('device', '?'), data.get('phase', '?')))
         call(token, 'sendMessage', {'chat_id': chat_id,
-             'text': ('Вижу, что подключить не получилось — мы уже в курсе. '
-                      'Напишите сюда пару слов, что вы увидели, и мы поможем прямо здесь.'
-                      if opened else
-                      'Вижу, что подключить не получилось. Напишите сюда, что вы увидели, — поможем.')})
+             'text': 'Вижу, что подключить не получилось. Вот что можно сделать 👇'})
         send_screen(token, chat_id, 'help', user)
 
 
 def on_message(token, msg):
     if 'web_app_data' in msg:
         on_web_app_data(token, msg); return True
-    sc = support_chat()
-    if sc and msg['chat']['id'] == sc:
-        return on_support_reply(token, msg)
 
     text = msg.get('text') or ''
     parts = text.split()
@@ -543,18 +460,6 @@ def on_message(token, msg):
         show_home(token, msg['chat']['id'], msg['from']); return True
     if text == S.KB_HELP:
         send_screen(token, msg['chat']['id'], 'help', msg['from']); return True
-
-    if cmd == '/admin':
-        if args and args[0] == ADMIN_CODE:
-            os.makedirs(os.path.dirname(SUPPORT_FILE), exist_ok=True)
-            open(SUPPORT_FILE, 'w', encoding='utf-8').write(str(msg['chat']['id']))
-            os.chmod(SUPPORT_FILE, 0o600)
-            call(token, 'sendMessage', {'chat_id': msg['chat']['id'],
-                 'text': '✅ Этот чат теперь получает обращения. Отвечайте на пересланные сообщения — ответ уйдёт человеку.'})
-        else:
-            call(token, 'sendMessage', {'chat_id': msg['chat']['id'],
-                 'text': 'Код — в консоли бота при запуске: /admin 1234'})
-        return True
 
     if cmd == '/connect':
         call(token, 'sendMessage', {'chat_id': msg['chat']['id'], 'text': '👇 Нажмите, чтобы подключить VPN',
@@ -602,22 +507,19 @@ def on_message(token, msg):
         show_home(token, msg['chat']['id'], msg['from'])
         return True
 
-    # Любой текст — это обращение. Пересылаем человеку и говорим, что услышали.
-    # По приметам сразу показываем нужный раздел, чтобы не ждать ответа зря.
+    # Молчание выглядит как поломка. На любой текст отвечаем экраном,
+    # а по приметам — сразу нужным разделом. Поддержка — отдельный бот.
     low = text.lower()
-    opened = open_ticket(token, msg['chat']['id'], msg['from'], 'Сообщение в бот', msg)
-    if any(w in low for w in ('оплат', 'продл', 'куп', 'тариф', 'цена', 'стоим')):
-        hint, target = 'Вот цены — а по вопросу ответим здесь же.', 'tariffs'
+    if any(w in low for w in ('оплат', 'продл', 'куп', 'тариф', 'цен', 'стои', 'скольк')):
+        target = 'tariffs'
     elif any(w in low for w in ('инструк', 'настро', 'как подключ')):
-        hint, target = 'Вот как настроить — а если не выйдет, ответим здесь же.', 'howto'
+        target = 'howto'
+    elif any(w in low for w in ('не работает', 'не подключ', 'ошибк', 'помог', 'поддерж')):
+        target = 'help'
     else:
-        hint, target = None, None
-    call(token, 'sendMessage', {'chat_id': msg['chat']['id'],
-         'text': ('✅ Получили, ответим здесь же. ' + (hint or 'Обычно в течение часа.'))
-                 if opened else
-                 'Пока поддержка не подключена к боту. ' + (hint or 'Напишите нам: ' + S.SUPPORT_URL)})
-    if target:
-        send_screen(token, msg['chat']['id'], target, msg['from'])
+        show_home(token, msg['chat']['id'], msg['from'])
+        return True
+    send_screen(token, msg['chat']['id'], target, msg['from'])
     return True
 
 
@@ -751,7 +653,7 @@ def main():
 
     print('бот @%s слушает, экранов: %d. Ctrl+C — остановить'
           % (BOT_USERNAME, len(S.SCREENS)))
-    print('чат поддержки: %s' % (support_chat() or 'не задан — отправьте боту  /admin %s  из чата, куда слать обращения' % ADMIN_CODE))
+
 
     threading.Thread(target=notifier, args=(token,), daemon=True).start()
 

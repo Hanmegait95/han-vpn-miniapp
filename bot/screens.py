@@ -319,18 +319,20 @@ def referral_buttons(p):
 
 def help_caption(p):
     return ('🆘 <b>Помощь</b>\n\n'
-            '<b>Просто напишите сюда, что случилось</b> — обычным сообщением, '
-            'как другу. Ответит живой человек.\n\n'
-            '<blockquote>Или нажмите, что подходит 👇</blockquote>')
+            'Нажмите, что подходит. Если ничего не помогло — '
+            '<b>напишите нам</b>, ответит живой человек.\n\n'
+            '<blockquote>Ваш номер для обращения: <code>%s</code>\n'
+            'Нажмите на него — скопируется.</blockquote>') % p['telegram_id']
 
 
 def help_buttons(p):
     return [
         [{'text': '🔌 Не подключается — покажите ещё раз', 'web_app': miniapp()}],
-        [{'text': '💳 Вопрос по оплате', 'act': 'topic:pay'},
-         {'text': '📘 Как настроить', 'nav': 'howto'}],
+        [{'text': '📘 Как настроить', 'nav': 'howto'},
+         {'text': '💳 Сколько стоит', 'nav': 'tariffs'}],
         [{'text': '📣 Новости и статус серверов', 'nav': 'channel'},
          {'text': '📄 Документы', 'nav': 'terms'}],
+        [{'text': '✍️ Написать нам', 'url': SUPPORT_URL}],
     ]
 
 
@@ -398,7 +400,7 @@ def reply_keyboard():
         ],
         'resize_keyboard': True,
         'is_persistent': True,
-        'input_field_placeholder': 'Напишите вопрос — ответит человек',
+        'input_field_placeholder': 'Нажмите кнопку внизу',
     }
 
 
