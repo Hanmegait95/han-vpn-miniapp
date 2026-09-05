@@ -291,19 +291,19 @@
     <div class="cmd"><b>$</b><span id="statusCmd">han --status</span></div>
 
     <h1 class="display" id="statusHead">
-      <span id="headTop">Подписка</span>
-      <span class="hi" id="headBottom">активна</span>
+      <span id="headTop">Загрузка</span>
+      <span class="hi" id="headBottom">…</span>
     </h1>
 
     <p class="note">
       <span class="arrow">&gt;</span>
-      <span id="statusNote">Действует до 14 декабря 2026</span>
+      <span id="statusNote"></span>
       <i class="caret" aria-hidden="true"></i>
     </p>
 
     <div class="rail">
-      <div class="track"><div class="fill" id="railFill" style="--pct:55%"></div></div>
-      <div class="val" id="railVal">101 день</div>
+      <div class="track"><div class="fill" id="railFill" style="--pct:0%"></div></div>
+      <div class="val" id="railVal"></div>
     </div>
 
     <div id="renewSlot"></div>
@@ -347,17 +347,32 @@
      на большом экране — колонка рядом с корпусом. -->
 
 <script>
+/* Первым и отдельно от главного скрипта: ловит его ошибки, включая
+   синтаксические — иначе страница молча показывала бы заготовку.
+   На телефоне консоли нет, поэтому ошибка выводится прямо на экран. */
 (() => {
-  'use strict';
-
-  /* Любая ошибка — на экран, а не в тишину: на телефоне консоли нет */
-  const showError = (msg) => { try {
+  const tg = window.Telegram && window.Telegram.WebApp;
+  window.showError = (msg) => { try {
     document.getElementById('headTop').textContent = 'Ошибка';
     document.getElementById('headBottom').textContent = 'страницы';
     document.getElementById('statusNote').textContent = String(msg).slice(0, 140);
   } catch (e) {} };
-  window.addEventListener('error', (e) => showError(e.message || e));
-  window.addEventListener('unhandledrejection', (e) => showError(e.reason && e.reason.message || e.reason));
+
+  window.beacon = function () {};
+
+  window.addEventListener('error', (e) => {
+    const msg = String(e.message || e).slice(0, 200);
+    showError(msg); beacon('error', { msg: msg, line: e.lineno || null });
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    const msg = String(e.reason && e.reason.message || e.reason).slice(0, 200);
+    showError(msg); beacon('rejection', { msg: msg });
+  });
+})();
+</script>
+<script>
+(() => {
+  'use strict';
 
   const tg = window.Telegram && window.Telegram.WebApp;
   if (tg) {
@@ -382,6 +397,7 @@
   let trialHere = false;
   let paidHere = null;
   function tellBot(payload) {
+    beacon('tellBot', payload);
     if (!(tg && tg.sendData)) return false;
     try {
       tg.sendData(JSON.stringify(Object.assign(
@@ -605,6 +621,7 @@
   const RETRY_AFTER = 8000;     // столько ждём открытия приложения, потом предлагаем выбор
 
   function tryConnect() {
+    beacon('tap-connect', { app: currentApp(), phase: state.phase });
     openExternal(appInfo().add(SUB_LINK));
     go('checking');
   }
@@ -664,7 +681,7 @@
       title: () => 'Подключено',
       text: () => '<b>' + (lastClient || appTitle()) + '</b> получил подписку. ' +
                   'Включите VPN в самом приложении — кнопка «Подключить» там, на главном экране.' +
-                  '<br><br><i>Проверить просто: нажмите «Проверить» — если сайт открылся, VPN работает. '
+                  '<br><br><i>Проверить просто: нажмите «Проверить» — если сайт открылся, VPN работает. ' +
                   'Не открылся — нажмите «Помощь» в боте.</i>',
       cta: () => CAN_TELL ? 'Готово' : null,
       run: () => { if (CAN_TELL) tellBot({ event: 'connected' }); },
@@ -695,6 +712,7 @@
   }
 
   function go(phase) {
+    beacon('go', { to: phase });
     if (phase !== 'checking' && phase !== 'manual') stopWatch();
     state.phase = phase; save(); paint();
     if (phase === 'checking') startWatch();
@@ -841,7 +859,9 @@
 
   /* ── Старт ──────────────────────────────────────── */
   async function boot() {
+    beacon('boot');
     const raw = await load();
+    beacon('loaded', { raw: !!raw });
     if (raw) { try { Object.assign(state, JSON.parse(raw)); } catch (e) {} }
     const want = Q.get('platform');
     if (want && DEVICES[want]) { state.device = want; state.phase = 'connect'; }
@@ -855,11 +875,15 @@
                    renew: { label: 'Повторить', run: () => boot() } });
       return;
     }
+    beacon('status', { kind: st.kind, exp: st.expires_at, fetched: st.config_fetched_at });
     st = await ensureTrial(st);
+    beacon('trial-checked', { kind: st.kind, exp: st.expires_at });
     if (st.config_fetched_at && !want) { lastClient = st.last_client; state.phase = 'done'; }
     else if (state.phase === 'checking') state.phase = 'connect';
     if (!PHASES[state.phase]) state.phase = 'connect';
-    paintState(describe(st));
+    const view = describe(st);
+    paintState(view);
+    beacon('painted', { view: view.name, kind: sub.kind });
   }
 
   if (tg && tg.BackButton) tg.BackButton.onClick(() => { const p = PHASES[state.phase]; if (p && p.back) go(p.back); });

@@ -9,6 +9,7 @@
 Содержимое экранов — в screens.py, здесь только механика.
 """
 
+import http.client
 import json
 import mimetypes
 import os
@@ -57,7 +58,10 @@ def call(token, method, payload=None, timeout=40, quiet=False):
             body = json.load(res)
     except urllib.error.HTTPError as e:
         body = json.load(e)
-    except (urllib.error.URLError, TimeoutError):
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as e:
+        # сеть моргнула или Telegram оборвал соединение — не падаем, повторим
+        if not quiet:
+            print('  ! %s: сеть: %r' % (method, e))
         return None
     if not body.get('ok'):
         if not quiet:
@@ -662,7 +666,7 @@ def due_notifications(uid, rec, p, now):
                     'Бесплатные дни уже идут, а VPN ещё не включён. '
                     'Давайте настроим — это одна минута.\n\n'
                     '<blockquote>👇 Нажмите кнопку, дальше подскажем, что делать.</blockquote>',
-                    [[{'text': S.CONNECT, 'web_app': S.MINIAPP_URL}],
+                    [[{'text': S.CONNECT, 'web_app': {'url': S.miniapp(None, p)}}],
                      [{'text': S.HELP, 'callback_data': 'n:help'}]]))
 
     # 2. Меньше суток
@@ -733,10 +737,14 @@ def main():
 
     offset = None
     while True:
-        updates = call(token, 'getUpdates', {
-            'offset': offset, 'timeout': 30,
-            'allowed_updates': ['message', 'callback_query'],
-        })
+        try:
+            updates = call(token, 'getUpdates', {
+                'offset': offset, 'timeout': 30,
+                'allowed_updates': ['message', 'callback_query'],
+            })
+        except Exception as e:          # что бы ни случилось — бот остаётся жив
+            print('  ! getUpdates: %r' % e)
+            updates = None
         if updates is None:
             time.sleep(3)
             continue

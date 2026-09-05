@@ -86,8 +86,35 @@ DATA_LAYER = """  /* ── Бэкенд ─────────────
 
 """
 
+def check_js(html, label):
+    """Синтаксис inline-скриптов: node, а на macOS без node — JavaScriptCore
+    через osascript (тот же движок, что в WebView клиента Telegram для macOS).
+    Нет ни того ни другого — пропускаем с пометкой."""
+    import re, shutil, subprocess, tempfile
+    scripts = [m.group(1) for m in re.finditer(r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>', html, re.S)]
+    if shutil.which('node'):
+        def run(path): return subprocess.run(['node', '--check', path], capture_output=True, text=True)
+    elif shutil.which('osascript'):
+        jxa = ("function run(a){ObjC.import('Foundation');"
+               "const s=$.NSString.stringWithContentsOfFileEncodingError(a[0],4,null).js;"
+               "new Function(s);return 'ok';}")
+        def run(path): return subprocess.run(['osascript', '-l', 'JavaScript', '-e', jxa, path],
+                                             capture_output=True, text=True)
+    else:
+        print('  синтаксис JS не проверен: нет ни node, ни osascript')
+        return
+    for n, code in enumerate(scripts, 1):
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as f:
+            f.write(code); path = f.name
+        r = run(path); os.unlink(path)
+        if r.returncode:
+            sys.exit('%s: ошибка синтаксиса в скрипте %d:\n%s' % (label, n, (r.stderr or r.stdout).strip()))
+    print('  синтаксис JS: %s — %d скрипт(а) без ошибок' % (label, len(scripts)))
+
+
 def main():
     s = io.open(SRC, encoding='utf-8').read()
+    check_js(s, SRC)
 
     # ── слой данных: заглушка → бэк ─────────────────────────────
     s = cut(s, '  /* ── Бэкенд ─────', '  /* ── Статус ─────', 'заглушка бэка')
@@ -126,6 +153,12 @@ def main():
       return;
     }""", 'ошибка сети')
 
+    # ── телеметрия прототипа: в бою пустышка ─────────────────────
+    s = cut(s, '  /* Телеметрия прототипа:', "  window.addEventListener('error'", 'телеметрия')
+    s = must_replace(s, "  window.addEventListener('error'",
+                     "  window.beacon = function () {};\n\n  window.addEventListener('error'", 'пустышка beacon')
+    s = must_replace(s, "  beacon('script');\n", '', 'первый сигнал телеметрии')
+
     # ── тестовые крючки прототипа (sim=…) в бою не нужны ─────────
     s = must_replace(s, "    } else if (!Q.has('sim')) {      // sim=… — проверка в браузере без запуска приложений",
                      "    } else {", 'sim в openExternal')
@@ -133,11 +166,13 @@ def main():
                      "", 'sim в tryConnect')
 
     # ── проверки ────────────────────────────────────────────────
-    leftovers = [w for w in ("Q.get('kind')", 'han.sub', 'sub.hanvpn.app', 'sim=', "Q.has('sim')", 'class="proto', 'class="stage')
+    leftovers = [w for w in ("Q.get('kind')", 'han.sub', 'sub.hanvpn.app', 'sim=', "Q.has('sim')", 'class="proto', 'class="stage',
+                               'log.php', 'sendBeacon')
                  if w in s]
     if leftovers:
         sys.exit('в продакшен-версии осталась обвязка: ' + ', '.join(leftovers))
 
+    check_js(s, OUT)
     os.makedirs('production', exist_ok=True)
     io.open(OUT, 'w', encoding='utf-8').write(s)
     print('%s — %d КБ' % (OUT, len(s.encode('utf-8')) // 1024))
