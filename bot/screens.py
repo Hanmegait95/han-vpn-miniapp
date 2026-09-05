@@ -47,17 +47,17 @@ REFERRAL_REWARD = '300 ₽'
 
 # Человек знает марку телефона, а не название системы. Подсказываем.
 PLATFORMS = [
-    ('ios',     '📱 iPhone или iPad'),
-    ('android', '🤖 Android — Samsung, Xiaomi, Huawei и др.'),
-    ('windows', '💻 Ноутбук или компьютер с Windows'),
-    ('macos',   '🍎 MacBook или iMac'),
+    ('ios',     '📱 iPhone / iPad'),
+    ('android', '🤖 Android-телефон'),
+    ('windows', '💻 Windows (ноутбук, ПК)'),
+    ('macos',   '🍎 MacBook / iMac'),
     ('tv',      '📺 Телевизор'),
 ]
 
-BACK = '‹ Назад'
-HOME = '🏠 Кабинет'
+BACK = '◀️ Назад'
+HOME = '🏠 Кабинет'   # только на нижней клавиатуре
 CONNECT = '🔌 Подключить VPN'
-HELP = '🆘 Не получается — помогите'
+HELP = '🆘 Помощь'
 
 MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
           'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря']
@@ -106,8 +106,20 @@ def ago(delta):
     return span(delta) + ' назад'
 
 
-def miniapp(platform=None):
-    return MINIAPP_URL + ('?platform=' + platform if platform else '')
+def miniapp(platform=None, p=None):
+    """
+    Ссылка на мини-аппу. p — подсказка о состоянии (kind/until): прототип
+    без бэка узнаёт из неё, есть ли подписка, и умеет включить бесплатные
+    дни сам. В бою мини-аппа спросит бэк по initData, параметр не нужен.
+    """
+    q = []
+    if platform:
+        q.append('platform=' + platform)
+    if p:
+        q.append('kind=' + p['kind'])
+        if p.get('until'):
+            q.append('until=' + p['until'].strftime('%Y-%m-%d'))
+    return MINIAPP_URL + ('?' + '&'.join(q) if q else '')
 
 
 def tariff(pid):
@@ -129,9 +141,9 @@ def welcome_caption(p):
 
 def welcome_buttons(p):
     return [
-        [{'text': '🎁 Включить %d дня бесплатно' % TRIAL_DAYS, 'act': 'trial'}],
-        [{'text': '💳 Сколько стоит потом', 'nav': 'tariffs'},
-         {'text': HELP, 'nav': 'help'}],
+        [{'text': '🎁 %d дня бесплатно' % TRIAL_DAYS, 'act': 'trial'}],
+        [{'text': '🔌 Подключить VPN', 'web_app': miniapp(None, p)}],
+        [{'text': '💳 Цены', 'nav': 'tariffs'}, {'text': HELP, 'nav': 'help'}],
     ]
 
 
@@ -153,9 +165,9 @@ def activated_caption(p):
 
 def activated_buttons(p):
     if not p['connected']:
-        return [[{'text': CONNECT, 'web_app': miniapp()}],
+        return [[{'text': CONNECT, 'web_app': miniapp(None, p)}],
                 [{'text': HELP, 'nav': 'help'}]]
-    return [[{'text': '🏠 В кабинет', 'nav': 'home'}]]
+    return []
 
 
 # ── Кабинет: подписка действует ────────────────────────────────────
@@ -188,15 +200,14 @@ def cabinet_caption(p):
 
 def cabinet_buttons(p):
     if not p['connected']:
-        rows = [[{'text': CONNECT, 'web_app': miniapp()}]]
+        rows = [[{'text': CONNECT, 'web_app': miniapp(None, p)}]]
     else:
         rows = [[{'text': ('💳 Купить подписку' if p['kind'] == 'trial' else '🛒 Продлить подписку'),
                   'nav': 'tariffs'}],
-                [{'text': '➕ Подключить ещё телефон или ноутбук', 'web_app': miniapp()}]]
+                [{'text': '➕ Ещё устройство', 'web_app': miniapp(None, p)}]]
     rows += [
         [{'text': '🎁 Пригласить друга', 'nav': 'referral'}],
-        [{'text': '📘 Как настроить', 'nav': 'howto'},
-         {'text': '❓ Помощь', 'nav': 'help'}],
+        [{'text': '📘 Настройка', 'nav': 'howto'}, {'text': HELP, 'nav': 'help'}],
     ]
     return rows
 
@@ -217,8 +228,8 @@ def expiring_buttons(p):
     rows = [[{'text': '💳 Купить подписку' if p['kind'] == 'trial' else '🛒 Продлить подписку',
               'nav': 'tariffs'}]]
     if not p['connected']:
-        rows.append([{'text': CONNECT, 'web_app': miniapp()}])
-    rows.append([{'text': '❓ Помощь', 'nav': 'help'}])
+        rows.append([{'text': CONNECT, 'web_app': miniapp(None, p)}])
+    rows.append([{'text': HELP, 'nav': 'help'}])
     return rows
 
 
@@ -240,7 +251,7 @@ def expired_buttons(p):
     return [
         [{'text': '💳 Купить подписку' if p['kind'] == 'trial' else '🛒 Продлить подписку',
           'nav': 'tariffs'}],
-        [{'text': '❓ Помощь', 'nav': 'help'}],
+        [{'text': HELP, 'nav': 'help'}],
     ]
 
 
@@ -282,15 +293,14 @@ def pay_screen(t):
 # ── Как настроить ──────────────────────────────────────────────────
 
 def howto_caption(p):
-    return ('📘 <b>Как настроить</b>\n\n'
-            'Выберите, на чём хотите включить VPN. '
-            'Дальше всё покажем по шагам.\n\n'
-            '<blockquote>Скачивать и настраивать будем вместе — '
-            'на каждом шаге подскажем, что нажать.</blockquote>')
+    return ('📘 <b>Настройка</b>\n\n'
+            'Выберите, на чём включить VPN — дальше всё покажем по шагам.\n\n'
+            '<blockquote>Android — это Samsung, Xiaomi, Huawei, Honor, Realme '
+            'и почти все телефоны, кроме iPhone.</blockquote>')
 
 
 def howto_buttons(p):
-    return [[{'text': title, 'web_app': miniapp(pid)}] for pid, title in PLATFORMS]
+    return [[{'text': title, 'web_app': miniapp(pid, p)}] for pid, title in PLATFORMS]
 
 
 # ── Пригласить друга ───────────────────────────────────────────────
@@ -311,7 +321,7 @@ def referral_buttons(p):
                 '%2C%203%20%D0%B4%D0%BD%D1%8F%20%D0%B1%D0%B5%D1%81%D0%BF%D0%BB%D0%B0%D1%82%D0%BD%D0%BE'))
     return [
         [{'text': '📤 Отправить другу', 'url': share}],
-        [{'text': '👥 Кого я пригласил', 'act': 'refstats'}],
+        [{'text': '👥 Мои приглашения', 'act': 'refstats'}],
     ]
 
 
@@ -327,11 +337,9 @@ def help_caption(p):
 
 def help_buttons(p):
     return [
-        [{'text': '🔌 Не подключается — покажите ещё раз', 'web_app': miniapp()}],
-        [{'text': '📘 Как настроить', 'nav': 'howto'},
-         {'text': '💳 Сколько стоит', 'nav': 'tariffs'}],
-        [{'text': '📣 Новости и статус серверов', 'nav': 'channel'},
-         {'text': '📄 Документы', 'nav': 'terms'}],
+        [{'text': '🔌 Показать подключение', 'web_app': miniapp(None, p)}],
+        [{'text': '📘 Настройка', 'nav': 'howto'}, {'text': '💳 Цены', 'nav': 'tariffs'}],
+        [{'text': '📣 Новости', 'nav': 'channel'}, {'text': '📄 Документы', 'nav': 'terms'}],
         [{'text': '✍️ Написать нам', 'url': SUPPORT_URL}],
     ]
 
@@ -352,7 +360,7 @@ SCREENS = {
                                     'Всё работает. Если что-то перестанет — '
                                     'напишите сюда или нажмите «Помощь» внизу.'
                                     + ('\n\n<blockquote>%s</blockquote>' % period_line(p) if p['until'] else '')),
-              'buttons': lambda p: [[{'text': '🏠 В кабинет', 'nav': 'home'}]]},
+              'buttons': lambda p: []},
     'tariffs':  {'banner': 'tariffs-banner.png', 'back': 'home',
                  'caption': tariffs_caption, 'buttons': tariffs_buttons},
     'howto':    {'banner': 'howto-banner.png', 'back': 'home',

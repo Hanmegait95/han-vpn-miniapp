@@ -227,16 +227,11 @@ def keyboard(screen, profile):
                 btn['url'] = b['url']
             out.append(btn)
         rows.append(out)
-    # Домой — с любого экрана в одно нажатие. «Назад» показываем только
-    # когда он ведёт не домой, иначе две кнопки делали бы одно и то же.
+    # «Назад» на каждом экране, кроме корневых: ведёт на шаг выше.
+    # «Кабинет» — на нижней клавиатуре, здесь не дублируем.
     if screen.get('back'):
-        home = S.home(profile)
-        back = home if screen['back'] == 'home' else screen['back']
-        nav = []
-        if back != home:
-            nav.append({'text': S.BACK, 'callback_data': 'n:' + back})
-        nav.append({'text': S.HOME, 'callback_data': 'n:home'})
-        rows.append(nav)
+        back = S.home(profile) if screen['back'] == 'home' else screen['back']
+        rows.append([{'text': S.BACK, 'callback_data': 'n:' + back}])
     return {'inline_keyboard': rows}
 
 
@@ -436,6 +431,12 @@ def on_web_app_data(token, msg):
     user, chat_id = msg['from'], msg['chat']['id']
     ev = data.get('event')
     print('  мини-аппа: %s от %s' % (ev, user.get('username') or user['id']))
+    # Бесплатные дни включили прямо в мини-аппе — записываем, если ещё не было
+    if data.get('trial') and load_profile(user)['kind'] == 'new':
+        now = datetime.now(timezone.utc)
+        store.update(user['id'], trial_at=now.isoformat(),
+                     trial_until=(now + timedelta(days=S.TRIAL_DAYS)).isoformat())
+        print('    бесплатные дни включены из мини-аппы')
     if ev == 'connected':
         store.update(user['id'], connected=True)
         send_screen(token, chat_id, 'ready', user, replace_card=True)

@@ -49,7 +49,7 @@ DATA_LAYER = '''  /* ── Бэкенд ─────────────
      запроса брать нельзя.
 
      Ответ:
-       { expires_at:        ISO,            // когда заканчивается
+       { expires_at:        ISO | null,     // когда заканчивается; null — подписки нет
          unlimited:         bool,           // бессрочная — вместо даты «Бессрочная»
          period_days:       number,         // длина оплаченного периода, для шкалы
          subscription_url:  string,         // ссылка подписки
@@ -99,7 +99,32 @@ DATA_LAYER = '''  /* ── Бэкенд ─────────────
 
   const RENEW = { label: 'Продлить подписку', alarm: false };
 
+  const TRIAL_URL = '/miniapp/trial';                                       // TODO: свой адрес
+
+  /* Бесплатные дни включаются и отсюда — если человек нажал «Подключить»
+     раньше, чем «3 дня бесплатно» в боте. POST с initData, потом перечитываем статус. */
+  async function activateTrial() {
+    try {
+      const res = await fetch(TRIAL_URL, { method: 'POST', cache: 'no-store',
+        headers: { 'X-Telegram-Init-Data': (tg && tg.initData) || '' } });
+      if (!res.ok) throw new Error('trial ' + res.status);
+      cheer(); toast('3 дня бесплатно включены');
+      trialHere = true;
+      state.phase = 'install';
+    } catch (e) {
+      toast('Не удалось включить. Попробуйте ещё раз');
+    }
+    boot();
+  }
+
   function describe(p) {
+    if (!p.unlimited && !p.expires_at) {
+      return { name: 'none', beacon: 'нет подписки', cmd: 'han --trial',
+               top: '3 дня', bottom: 'бесплатно',
+               note: 'Подписки пока нет. Включите бесплатные дни — карта не нужна',
+               pct: 0, val: '—',
+               renew: { label: 'Включить 3 дня бесплатно', alarm: false, run: activateTrial } };
+    }
     if (p.unlimited) {
       return { name: 'active', beacon: 'активна', cmd: 'han --status',
                top: 'Подписка', bottom: 'активна',
@@ -189,14 +214,12 @@ def main():
     # ── статус: вместо трёх готовых состояний — расчёт из ответа ─
     s = must_replace(
         s,
-        "    return statusName === 'off' && !app.hasAttribute('data-connect-open');",
-        "    return !!status && status.name === 'off' && !app.hasAttribute('data-connect-open');",
+        "    return (statusName === 'off' || statusName === 'none') && !app.hasAttribute('data-connect-open');",
+        "    return !!status && (status.name === 'off' || status.name === 'none') && !app.hasAttribute('data-connect-open');",
         'wizardHidden')
     s = must_replace_all(s, '    const s = STATES[statusName];', '    const s = status;',
                          'обращения к STATES')
-    # у состояния может быть своё действие (например «Повторить» при ошибке)
-    s = must_replace_all(s, 'run: renew };', 'run: s.renew.run || renew };',
-                         'действие кнопки статуса')
+    s = must_replace(s, "alarm: statusName === 'off'", "alarm: status.name === 'off'", 'alarm при скрытом мастере')
 
     # ── ссылки наружу и запуск ──────────────────────────────────
     s = must_replace(s, "openExternal('https://hanvpn.app/download/' + state.device)",

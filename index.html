@@ -158,6 +158,9 @@
   [data-state="off"]:not([data-connect-open]) #prog,
   [data-state="off"]:not([data-connect-open]) #wiz { display: none; }
   [data-state="off"]:not([data-connect-open]) #showConnect { display: block; }
+  /* Подписки ещё нет: подключать нечего, сначала бесплатные дни */
+  [data-state="none"] #prog, [data-state="none"] #wiz, [data-state="none"] #showConnect { display: none; }
+  [data-state="none"] .beacon { background: var(--mute); box-shadow: none; }
 
   .prog { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
   .prog-bar { display: flex; gap: 4px; flex: 1; }
@@ -443,7 +446,8 @@
     <div class="proto-group">
       <span class="proto-label">Подписка</span>
       <div class="proto-row">
-        <button type="button" data-set="active" aria-pressed="true">активна</button>
+        <button type="button" data-set="none" aria-pressed="false">нет подписки</button>
+    <button type="button" data-set="active" aria-pressed="true">активна</button>
         <button type="button" data-set="soon" aria-pressed="false">10 часов</button>
         <button type="button" data-set="off" aria-pressed="false">истекла</button>
       </div>
@@ -494,8 +498,9 @@
      тогда этих ссылок просто нет. */
   const FROM_KB = new URLSearchParams(location.search).get('src') === 'kb'
                   && !!(tg && tg.sendData);
+  let trialHere = false;   // бесплатные дни включили в этом окне — скажем боту
   function tellBot(payload) {
-    try { tg.sendData(JSON.stringify(Object.assign({ device: state.device, phase: state.phase }, payload))); }
+    try { tg.sendData(JSON.stringify(Object.assign({ device: state.device, phase: state.phase, trial: trialHere }, payload))); }
     catch (e) {}
   }
 
@@ -535,7 +540,27 @@
 
   /* ── Статус подписки ────────────────────────────
      Даты приходят с бэка как ISO; здесь показаны готовыми строками. */
+  /* Бесплатные дни можно включить прямо здесь — если человек нажал
+     «Подключить» раньше, чем «3 дня бесплатно» в боте. Демо: меняем
+     локальное состояние; в бою — POST /miniapp/trial. Бот узнаёт об этом
+     из sendData (поле trial). */
+  function activateTrial() {
+    demo.state = 'active';
+    trialHere = true;
+    try { localStorage.setItem('han.trial', '1'); } catch (e) {}
+    cheer();
+    toast('3 дня бесплатно включены');
+    state.phase = 'install';
+    paintState('active');
+  }
+
   const STATES = {
+    none: {
+      beacon: 'нет подписки', cmd: 'han --trial',
+      top: '3 дня', bottom: 'бесплатно',
+      note: 'Подписки пока нет. Включите бесплатные дни — карта не нужна', pct: 0, val: '—',
+      renew: { label: 'Включить 3 дня бесплатно', alarm: false, run: activateTrial }
+    },
     active: {
       beacon: 'активна', cmd: 'han --status',
       top: 'Подписка', bottom: 'активна',
@@ -755,7 +780,7 @@
   }
 
   function wizardHidden() {
-    return statusName === 'off' && !app.hasAttribute('data-connect-open');
+    return (statusName === 'off' || statusName === 'none') && !app.hasAttribute('data-connect-open');
   }
 
   function renderWizard() {
@@ -816,13 +841,13 @@
      приложением единственное живое действие — продлить. */
   function currentPrimary() {
     const s = STATES[statusName];
-    if (wizardHidden()) return { label: s.renew.label, alarm: true, run: renew };
+    if (wizardHidden()) return { label: s.renew.label, alarm: statusName === 'off', run: s.renew.run || renew };
 
     const p = PHASES[state.phase];
     if (state.phase !== 'done') {
       return { label: p.cta(), busy: !!p.busy, run: p.run };
     }
-    if (s.renew) return { label: s.renew.label, alarm: s.renew.alarm, run: renew };
+    if (s.renew) return { label: s.renew.label, alarm: s.renew.alarm, run: s.renew.run || renew };
     return null;   // всё настроено и подписка активна — торопить не с чем
   }
 
@@ -1017,6 +1042,7 @@
 
   function readHash() {
     const h = location.hash.replace('#', '').split('-');
+    if (h.includes('new')) demo.state = 'none';
     if (h.includes('soon')) demo.state = 'soon';
     if (h.includes('off')) demo.state = 'off';
     if (h.includes('ready')) demo.fetchedAt = Date.now() - 120000;
@@ -1064,10 +1090,19 @@
     // Бот открывает мини-аппу сразу на нужном устройстве: ?platform=ios.
     // Явный выбор важнее и сохранённого состояния, и «уже настроено»
     // с сервера — человек пришёл подключить именно это устройство.
-    const want = new URLSearchParams(location.search).get('platform');
+    const q = new URLSearchParams(location.search);
+    const want = q.get('platform');
     if (want && DEVICES[want]) {
       state.device = want; state.appId = null; state.phase = 'install';
     }
+    // Бот передаёт kind=new|trial|paid. Если бесплатные дни уже включали
+    // здесь — помним об этом и не показываем «нет подписки» снова.
+    let remembered = false;
+    try { remembered = localStorage.getItem('han.trial') === '1'; } catch (e) {}
+    const kind = q.get('kind');
+    if (kind === 'new' && !remembered) demo.state = 'none';
+    else if (kind === 'trial' || kind === 'paid') demo.state = 'active';
+    if (remembered) trialHere = true;
 
     const st = await API.status();
     if (st.config_fetched_at && !want) {
