@@ -30,6 +30,9 @@ ASSETS = os.path.join(HERE, '..', 'assets')
 TOKEN_FILE = os.path.expanduser('~/.config/hanvpn/bot_token')
 CACHE_FILE = os.path.expanduser('~/.config/hanvpn/file_ids.json')
 
+# Кому доступна /stats. TODO: свои id.
+ADMINS = {891988013}
+
 
 # ── Bot API ────────────────────────────────────────────────────────
 
@@ -171,6 +174,9 @@ def load_profile(user):
         'connected': bool(rec.get('connected')),
         'sub_last_opened_at': None, 'online_at': None,
         'plan': S.tariff(rec.get('plan')) if rec.get('plan') else None,
+        'referrer_name': (store.get(rec['referrer']).get('name') if rec.get('referrer') else None),
+        'invited': len(rec.get('invited') or []),
+        'invited_connected': sum(1 for x in (rec.get('invited') or []) if store.get(x).get('connected')),
     }
 
     paid_until = parse_dt(rec.get('paid_until'))
@@ -380,9 +386,15 @@ def act_pay(token, cq, plan_id):
     edit_screen(token, msg['chat']['id'], msg['message_id'], 'activated', user)
 
 
-ACTIONS = {
-    'refstats': 'Скоро здесь будет список тех, кто пришёл по вашей ссылке.',
-}
+def act_refstats(token, cq):
+    p = load_profile(cq['from'])
+    if not p['invited']:
+        answer(token, cq, 'Пока никто не перешёл по вашей ссылке. Отправьте её другу — %d дня бесплатно ему, %s вам.' % (S.TRIAL_DAYS, S.REFERRAL_REWARD), alert=True)
+    else:
+        answer(token, cq, 'По вашей ссылке пришли: %d. Подключили VPN: %d.' % (p['invited'], p['invited_connected']), alert=True)
+
+
+ACTIONS = {}
 
 
 def on_callback(token, cq):
@@ -419,6 +431,8 @@ def on_callback(token, cq):
         act_buy(token, cq, arg); return
     if key == 'pay':
         act_pay(token, cq, arg); return
+    if key == 'refstats':
+        act_refstats(token, cq); return
     answer(token, cq, ACTIONS.get(key, 'Этот раздел ещё в работе.'), alert=True)
 
 
@@ -460,6 +474,40 @@ def on_web_app_data(token, msg):
         send_screen(token, chat_id, 'help', user)
 
 
+def stats_text():
+    """Воронка по данным store: сколько зашли, включили дни, подключились, платят."""
+    now = datetime.now(timezone.utc)
+    users = {k: v for k, v in store.all_users().items() if not k.startswith('ticket:') and v.get('chat_id')}
+    n = len(users)
+    kinds = {'new': 0, 'trial': 0, 'paid': 0}
+    expired = expiring = connected = today = referred = 0
+    for uid, rec in users.items():
+        p = load_profile({'id': int(uid), 'first_name': rec.get('name')})
+        if p['phase'] == 'expired':
+            expired += 1
+        else:
+            kinds[p['kind']] += 1
+            if p['phase'] == 'expiring':
+                expiring += 1
+        if p['connected']:
+            connected += 1
+        t = parse_dt(rec.get('trial_at'))
+        if t and (now - t) < timedelta(days=1):
+            today += 1
+        if rec.get('referrer'):
+            referred += 1
+    pct = lambda a, b: ('%d%%' % round(100.0 * a / b)) if b else '—'
+    return ('📊 <b>Статистика</b>\n\n'
+            '<blockquote>Всего в боте: <b>%d</b>\n'
+            'Без подписки: %d · бесплатные дни: %d · оплатили: %d · истекло: %d\n'
+            'Подключили устройство: <b>%d</b> (%s от всех)\n'
+            'Кончается в сутки: %d\n'
+            'Включили бесплатные дни за 24 ч: %d\n'
+            'Пришли по приглашению: %d</blockquote>'
+            % (n, kinds['new'], kinds['trial'], kinds['paid'], expired,
+               connected, pct(connected, n), expiring, today, referred))
+
+
 def on_message(token, msg):
     if 'web_app_data' in msg:
         on_web_app_data(token, msg); return True
@@ -475,6 +523,11 @@ def on_message(token, msg):
     if text == S.KB_HELP:
         send_screen(token, msg['chat']['id'], 'help', msg['from']); return True
 
+    if cmd == '/stats' and msg['from']['id'] in ADMINS:
+        call(token, 'sendMessage', {'chat_id': msg['chat']['id'], 'parse_mode': 'HTML', 'text': stats_text()})
+        return True
+    # /stats от не-админа проваливается ниже — как любая незнакомая команда, домой
+
     if cmd == '/connect':
         call(token, 'sendMessage', {'chat_id': msg['chat']['id'], 'text': '👇 Нажмите, чтобы подключить VPN',
              'reply_markup': {'inline_keyboard': [[{'text': S.CONNECT, 'web_app': {'url': S.miniapp()}}]]}})
@@ -482,8 +535,15 @@ def on_message(token, msg):
 
     if cmd == '/start':
         if args and args[0].startswith('ref'):
-            # TODO: сохранить пригласившего, когда появится база
-            print('    пришёл по ссылке %s' % args[0])
+            ref = args[0][3:]
+            me = msg['from']['id']
+            if ref.isdigit() and int(ref) != me and not store.get(me).get('referrer') \
+                    and store.get(int(ref)).get('chat_id'):
+                store.update(me, referrer=int(ref), name=msg['from'].get('first_name') or '')
+                inv = store.get(int(ref)).get('invited') or []
+                if me not in inv:
+                    store.update(int(ref), invited=inv + [me])
+                print('    пришёл по ссылке от %s' % ref)
         show_home(token, msg['chat']['id'], msg['from'])
         return True
 

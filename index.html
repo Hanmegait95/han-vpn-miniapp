@@ -414,6 +414,7 @@
     { id: 'y1', title: 'Год',      price: '1490 ₽', days: 365, devices: 5 },
   ];
   const TRIAL_DEVICES = 1;       // бесплатные дни — на одно устройство
+  const CHECK_URL = 'https://www.instagram.com/';   // TODO: сайт, который без VPN не открывается
   const SUB_LINK = 'https://sub.hanvpn.app/user_' + (TG_USER ? TG_USER.id : '000000000');
 
   const sub = { kind: 'new', until: null, fetchedAt: null };
@@ -500,8 +501,10 @@
                pct, val: h + ' ч', renew: { label: trial ? 'Купить подписку' : 'Продлить подписку', run: openPlans } };
     }
     const d = Math.round(hours / 24);
+    const dl = Math.max(1, Math.ceil(hours / 24));        // бесплатных дней осталось — вверх, чтобы в первый день было «3»
     return { name: 'active', beacon: trial ? 'бесплатные дни' : 'активна', cmd: 'han --status',
-             top: trial ? TRIAL_DAYS + ' дня' : 'Подписка', bottom: trial ? 'бесплатно' : 'активна',
+             top: trial ? 'Бесплатно ещё' : 'Подписка',
+             bottom: trial ? dl + ' ' + plural(dl, 'день', 'дня', 'дней') : 'активна',
              note: who() + (trial ? 'бесплатные дни до ' + fmtDate(until) + ' · ' + TRIAL_DEVICES + ' устройство'
                                  : 'подписка оплачена до ' + fmtDate(until)),
              pct, val: d + ' ' + plural(d, 'день', 'дня', 'дней'), renew: null };
@@ -680,9 +683,13 @@
       step: 2, complete: true, ok: true,
       title: () => 'Подключено',
       text: () => '<b>' + (lastClient || appTitle()) + '</b> получил подписку. ' +
-                  'Включите VPN в самом приложении — кнопка «Подключить» там, на главном экране.',
+                  'Включите VPN в самом приложении — кнопка «Подключить» там, на главном экране.' +
+                  '<br><br><i>Проверить просто: нажмите «Проверить» — если сайт открылся, VPN работает. '
+                  'Не открылся — нажмите «Помощь» в боте.</i>',
       cta: () => CAN_TELL ? 'Готово' : null,
       run: () => { if (CAN_TELL) tellBot({ event: 'connected' }); },
+      secondary: () => '🌐 Проверить, что работает',
+      run2: () => openExternal(CHECK_URL),
       alts: () => [
         // бесплатные дни — одно устройство; второе только по тарифу
         sub.kind === 'trial'
@@ -749,7 +756,7 @@
     }
     if (p.secondary && p.secondary()) {
       const b = document.createElement('button'); b.type = 'button'; b.className = 'btn btn-ghost';
-      b.textContent = p.secondary(); b.addEventListener('click', () => { buzz('medium'); p.run(); }); step.appendChild(b);
+      b.textContent = p.secondary(); b.addEventListener('click', () => { buzz('medium'); (p.run2 || p.run)(); }); step.appendChild(b);
     }
     const alts = (p.alts ? p.alts() : []).filter(Boolean);
     if (alts.length) {

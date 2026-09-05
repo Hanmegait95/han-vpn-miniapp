@@ -32,6 +32,7 @@ TRIAL_DAYS = 3
 MINIAPP_URL = 'https://hanproject.ru/vpnminiapp/'
 CHANNEL_URL = 'https://t.me/hanvpn'          # TODO: настоящий канал
 SUPPORT_URL = 'https://t.me/hanvpn_support'  # TODO: настоящая поддержка
+CHECK_URL = 'https://www.instagram.com/'      # TODO: сайт, который без VPN не открывается
 TERMS_URL = 'https://hanproject.ru/terms'    # TODO: документы
 
 # TODO: цены. На баннере «актуальные цены в боте» — значит правда живёт здесь.
@@ -139,8 +140,10 @@ def tariff(pid):
 # ── Новичок: VPN ещё не активирован ────────────────────────────────
 
 def welcome_caption(p):
+    invited = ('👋 <b>Вас пригласил %s</b> — первые %d дня бесплатно.\n\n'
+               % (esc(p['referrer_name']), TRIAL_DAYS)) if p.get('referrer_name') else ''
     return (
-        '<b>Han VPN</b>\n\n'
+        '<b>Han VPN</b>\n\n' + invited +
         'Открывает сайты и приложения, которые без VPN не работают. '
         'Без ограничений по скорости и объёму.\n\n'
         '<blockquote>🎁 <b>Первые %d дня — бесплатно</b>, на одно устройство.\n'
@@ -327,9 +330,10 @@ def referral_caption(p):
     return ('🎁 <b>Пригласите друга</b>\n\n'
             'Отправьте другу вашу ссылку. Он получит %d дня бесплатно, '
             'а когда оплатит подписку — вы получите <b>%s</b>.\n\n'
-            '<blockquote>Ваша ссылка:\n<code>%s</code></blockquote>\n'
+            '<blockquote>Ваша ссылка:\n<code>%s</code>\n'
+            'Пришли по ней: <b>%d</b> · подключили VPN: <b>%d</b></blockquote>\n'
             '👇 Нажмите «Отправить другу» — откроется список чатов.'
-            ) % (TRIAL_DAYS, REFERRAL_REWARD, esc(p['referral_link']))
+            ) % (TRIAL_DAYS, REFERRAL_REWARD, esc(p['referral_link']), p.get('invited', 0), p.get('invited_connected', 0))
 
 
 def referral_buttons(p):
@@ -376,9 +380,11 @@ SCREENS = {
     'ready': {'banner': 'ready-banner.png', 'back': 'home',
               'caption': lambda p: ('🟢 <b>Подписка добавлена в приложение</b>\n\n'
                                     'Включите VPN в самом приложении — кнопка «Подключить» на его '
-                                    'главном экране. Если что-то не так — «Помощь» внизу.'
-                                    + ('\n\n<blockquote>%s</blockquote>' % period_line(p) if p['until'] else '')),
-              'buttons': lambda p: []},
+                                    'главном экране.\n\n'
+                                    '<blockquote>Проверить просто: нажмите «Проверить» — открылся сайт, '
+                                    'значит работает. Не открылся — «Помощь» внизу.</blockquote>'
+                                    + ('\n%s' % period_line(p) if p['until'] else '')),
+              'buttons': lambda p: [[{'text': '🌐 Проверить VPN', 'url': CHECK_URL}]]},
     'tariffs':  {'banner': 'tariffs-banner.png', 'back': 'home',
                  'caption': tariffs_caption, 'buttons': tariffs_buttons},
     'howto':    {'banner': 'howto-banner.png', 'back': 'home',
