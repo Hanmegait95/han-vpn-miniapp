@@ -484,7 +484,8 @@
     const d = Math.round(hours / 24);
     return { name: 'active', beacon: trial ? 'бесплатные дни' : 'активна', cmd: 'han --status',
              top: trial ? TRIAL_DAYS + ' дня' : 'Подписка', bottom: trial ? 'бесплатно' : 'активна',
-             note: who() + (trial ? 'бесплатные дни до ' : 'подписка оплачена до ') + fmtDate(until),
+             note: who() + (trial ? 'бесплатные дни до ' + fmtDate(until) + ' · ' + TRIAL_DEVICES + ' устройство'
+                                 : 'подписка оплачена до ' + fmtDate(until)),
              pct, val: d + ' ' + plural(d, 'день', 'дня', 'дней'), renew: null };
   }
 
@@ -523,7 +524,7 @@
     TARIFFS.forEach((t) => {
       const b = document.createElement('button');
       b.type = 'button';
-      b.innerHTML = '<span>' + t.title + '</span><span><b>' + t.price + '</b> <small>демо</small></span>';
+      b.innerHTML = '<span>' + t.title + ' <small>до ' + t.devices + ' устр.</small></span><span><b>' + t.price + '</b> <small>демо</small></span>';
       b.addEventListener('click', async () => {
         closeSheet(); buzz('medium');
         try { await API.pay(t); } catch (e) { return; }
@@ -664,7 +665,10 @@
       cta: () => CAN_TELL ? 'Готово' : null,
       run: () => { if (CAN_TELL) tellBot({ event: 'connected' }); },
       alts: () => [
-        { label: 'подключить другое устройство', run: () => { sub.fetchedAt = null; saveSub(); state.installing = false; pickDevice(); } },
+        // бесплатные дни — одно устройство; второе только по тарифу
+        sub.kind === 'trial'
+          ? { label: 'нужно ещё устройство — выбрать тариф', run: openPlans }
+          : { label: 'подключить другое устройство', run: () => { sub.fetchedAt = null; saveSub(); state.installing = false; pickDevice(); } },
       ],
     },
   };

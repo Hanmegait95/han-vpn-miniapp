@@ -36,11 +36,12 @@ TERMS_URL = 'https://hanproject.ru/terms'    # TODO: документы
 
 # TODO: цены. На баннере «актуальные цены в боте» — значит правда живёт здесь.
 TARIFFS = [
-    {'id': 'm1', 'title': '1 месяц',  'price': '199 ₽',  'days': 30,  'note': 'попробовать'},
-    {'id': 'm3', 'title': '3 месяца', 'price': '449 ₽',  'days': 90,  'note': 'выгодно'},
-    {'id': 'y1', 'title': 'Год',      'price': '1490 ₽', 'days': 365, 'note': 'ещё выгоднее'},
+    {'id': 'm1', 'title': '1 месяц',  'price': '199 ₽',  'days': 30,  'devices': 3, 'note': 'попробовать'},
+    {'id': 'm3', 'title': '3 месяца', 'price': '449 ₽',  'days': 90,  'devices': 3, 'note': 'выгодно'},
+    {'id': 'y1', 'title': 'Год',      'price': '1490 ₽', 'days': 365, 'devices': 5, 'note': 'ещё выгоднее'},
 ]
 CHEAPEST = TARIFFS[0]
+TRIAL_DEVICES = 1          # бесплатные дни — на одно устройство
 
 # TODO: реальная сумма за приглашённого.
 REFERRAL_REWARD = '300 ₽'
@@ -76,6 +77,15 @@ def human_date(d):
     if d.year != datetime.now(timezone.utc).year:
         text += ' %d' % d.year
     return text
+
+
+def devices_word(n):
+    return '%d %s' % (n, plural(n, 'устройство', 'устройства', 'устройств'))
+
+
+def up_to(n):
+    # после «до» — родительный: «до 3 устройств», «до 1 устройства»
+    return 'до %d %s' % (n, 'устройства' if n == 1 else 'устройств')
 
 
 def plural(n, one, few, many):
@@ -133,18 +143,19 @@ def welcome_caption(p):
         '<b>Han VPN</b>\n\n'
         'Открывает сайты и приложения, которые без VPN не работают. '
         'Без ограничений по скорости и объёму.\n\n'
-        '<blockquote>🎁 <b>Первые %d дня — бесплатно.</b>\n'
-        'Включатся сами при первом подключении. Карта не нужна. '
-        'Потом — от %s в месяц, если понравится.</blockquote>\n'
+        '<blockquote>🎁 <b>Первые %d дня — бесплатно</b>, на одно устройство.\n'
+        'Включатся сами при первом подключении. Карта не нужна.</blockquote>\n'
+        'Нужно сразу несколько устройств — купите подписку: от %s в месяц.\n\n'
         '👇 Одна кнопка — и через минуту VPN работает.'
     ) % (TRIAL_DAYS, CHEAPEST['price'])
 
 
 def welcome_buttons(p):
-    # Одна кнопка. Бесплатные дни включаются внутри при первом «Подключить».
+    # Подключить — главное. Купить — видно сразу, не после пробных дней.
     return [
         [{'text': '🔌 Подключить VPN', 'web_app': miniapp(None, p)}],
-        [{'text': '💳 Цены', 'nav': 'tariffs'}, {'text': HELP, 'nav': 'help'}],
+        [{'text': '💳 Купить подписку', 'nav': 'tariffs'}],
+        [{'text': HELP, 'nav': 'help'}],
     ]
 
 
@@ -155,8 +166,9 @@ def activated_caption(p):
         head = ('🎉 <b>Бесплатные %d дня включены</b>\n'
                 'Работают до %s. Платить не нужно.' % (TRIAL_DAYS, human_date(p['until'])))
     else:
+        plan = p.get('plan') or CHEAPEST
         head = ('🎉 <b>Подписка оплачена</b>\n'
-                'Работает до %s.' % human_date(p['until']))
+                'Работает до %s · %s.' % (human_date(p['until']), up_to(plan['devices'])))
     step = ('Остался один шаг — включить VPN на телефоне. '
             'Нажмите кнопку: покажем, что скачать, и всё настроим. Одна минута.'
             if not p['connected'] else
@@ -188,9 +200,11 @@ def connection_line(p):
 
 def period_line(p):
     if p['kind'] == 'trial':
-        return ('🎁 Бесплатные дни — до <b>%s</b>. Потом от %s в месяц.'
-                % (human_date(p['until']), CHEAPEST['price']))
-    return 'Подписка оплачена до <b>%s</b>' % human_date(p['until'])
+        return ('🎁 Бесплатные дни до <b>%s</b> · %s.\n'
+                'Нужно больше устройств — выберите тариф, от %s в месяц.'
+                % (human_date(p['until']), devices_word(TRIAL_DEVICES), CHEAPEST['price']))
+    plan = p.get('plan') or CHEAPEST
+    return 'Подписка оплачена до <b>%s</b> · %s' % (human_date(p['until']), up_to(plan['devices']))
 
 
 def cabinet_caption(p):
@@ -200,12 +214,15 @@ def cabinet_caption(p):
 
 
 def cabinet_buttons(p):
+    trial = p['kind'] == 'trial'
+    buy = {'text': '💳 Купить подписку' if trial else '🛒 Продлить подписку', 'nav': 'tariffs'}
     if not p['connected']:
-        rows = [[{'text': CONNECT, 'web_app': miniapp(None, p)}]]
+        rows = [[{'text': CONNECT, 'web_app': miniapp(None, p)}], [buy]]
+    elif trial:
+        # бесплатные дни — одно устройство: второе только по тарифу
+        rows = [[buy]]
     else:
-        rows = [[{'text': ('💳 Купить подписку' if p['kind'] == 'trial' else '🛒 Продлить подписку'),
-                  'nav': 'tariffs'}],
-                [{'text': '➕ Ещё устройство', 'web_app': miniapp(None, p)}]]
+        rows = [[buy], [{'text': '➕ Ещё устройство', 'web_app': miniapp(None, p)}]]
     rows += [
         [{'text': '🎁 Пригласить друга', 'nav': 'referral'}],
         [{'text': '📘 Настройка', 'nav': 'howto'}, {'text': HELP, 'nav': 'help'}],
@@ -259,10 +276,10 @@ def expired_buttons(p):
 # ── Тарифы и оплата ────────────────────────────────────────────────
 
 def tariffs_caption(p):
-    rows = '\n'.join('<b>%s</b> — %s  · %s' % (t['title'], t['price'], t['note'])
+    rows = '\n'.join('<b>%s</b> — %s · %s' % (t['title'], t['price'], up_to(t['devices']))
                      for t in TARIFFS)
     return ('💳 <b>Сколько стоит</b>\n\n<blockquote>%s</blockquote>\n'
-            'Одна подписка — на все ваши устройства. '
+            'Телефон, ноутбук и телевизор — одной подпиской. '
             'Скорость и объём не ограничены.\n\n'
             '👇 Выберите срок') % rows
 
@@ -277,11 +294,11 @@ def pay_screen(t):
         # Продление добавляется к остатку, а не съедает его.
         base = p['until'] if p['until'] and p['until'] > p['now'] else p['now']
         until = base + timedelta(days=t['days'])
-        return ('💳 <b>%s — %s</b>\n\n'
+        return ('💳 <b>%s — %s</b> · %s\n\n'
                 'После оплаты VPN будет работать до <b>%s</b>.\n\n'
                 '<blockquote>Оплата картой или Telegram Stars. '
                 'Подписка не продлевается сама — спишем только то, что вы выбрали.</blockquote>\n'
-                '👇 Нажмите «Оплатить».') % (t['title'], t['price'], human_date(until))
+                '👇 Нажмите «Оплатить».') % (t['title'], t['price'], up_to(t['devices']), human_date(until))
 
     return {
         'banner': 'tariffs-banner.png', 'back': 'tariffs',
