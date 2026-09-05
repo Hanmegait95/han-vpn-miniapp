@@ -560,10 +560,19 @@
   /* ── Приложение и устройство ─────────────────────
      Happ в России уже не скачать, но у многих он стоит. INCY — скачивается.
      Поэтому первый вопрос мастера — не «установите», а «что у вас есть». */
+  /* Диплинки: INCY и Happ — из официальных доков; Shadowrocket — из конфига
+     Remnawave; v2RayTun, Hiddify, Streisand — по шаблону Remnawave «://import/»,
+     проверить на устройствах. Для чего угодно другого — ручной путь. */
   const APPS = {
-    Happ: { title: 'Happ', add: (u) => 'happ://add/' + u,    open: 'happ://', downloadable: false },
-    INCY: { title: 'INCY', add: (u) => 'incy://import/' + u, open: 'incy://connect', downloadable: true },
+    INCY:         { title: 'INCY',         add: (u) => 'incy://import/' + u,      open: 'incy://connect', on: ['ios','android','macos','windows','linux','tv'] },
+    Happ:         { title: 'Happ',         add: (u) => 'happ://add/' + u,         open: 'happ://',        on: ['ios','android','macos','windows','linux','tv'] },
+    v2RayTun:     { title: 'v2RayTun',     add: (u) => 'v2raytun://import/' + u,  open: 'v2raytun://',    on: ['ios','android','macos','windows'] },
+    Hiddify:      { title: 'Hiddify',      add: (u) => 'hiddify://import/' + u,   open: 'hiddify://',     on: ['ios','android','macos','windows','linux'] },
+    Streisand:    { title: 'Streisand',    add: (u) => 'streisand://import/' + u, open: 'streisand://',   on: ['ios','macos'] },
+    Shadowrocket: { title: 'Shadowrocket', add: (u) => 'shadowrocket://add/' + u, open: 'shadowrocket://',on: ['ios','macos'] },
+    other:        { title: 'моё приложение', add: null, open: null,               on: ['ios','android','macos','windows','linux','tv'] },
   };
+  const MAIN_APPS = ['INCY', 'Happ'];
   const DOWNLOAD_URL = (device) => 'https://hanvpn.app/download/incy/' + device;   // TODO: ваш редирект в магазин
 
   const DEVICES = {
@@ -588,6 +597,18 @@
   const dev = () => DEVICES[state.device];
   const currentApp = () => (APPS[state.appId] ? state.appId : 'INCY');
   const appInfo = () => APPS[currentApp()];
+  const appTitle = () => appInfo().title;
+  const appsFor = (device) => Object.keys(APPS).filter((k) => k !== 'other' && APPS[k].on.includes(device));
+
+  /* «Другое приложение»: список клиентов под это устройство + универсальный путь */
+  function pickApp() {
+    const items = appsFor(state.device).filter((k) => !MAIN_APPS.includes(k)).map((k) => ({ id: k, label: APPS[k].title }));
+    items.push({ id: 'other', label: 'Другое — скопировать ссылку' });
+    openSheet('Какое приложение стоит?', items, state.appId, (id) => {
+      state.appId = id; save();
+      if (id === 'other') toManual(); else go('link');
+    });
+  }
 
   /* ── Сценарий ───────────────────────────────────
      choose → (install →) link → checking → done | notfound → manual.
@@ -596,12 +617,13 @@
   const PHASES = {
     choose: {
       step: 1,
-      title: () => 'Какое приложение у вас есть?',
-      text: () => 'VPN работает через приложение. Если ничего не стоит — поставим INCY, это одна минута.',
+      title: () => 'Чем будете подключаться?',
+      text: () => 'VPN включается через приложение. Нажмите то, что у вас <b>уже стоит</b> — или поставьте INCY, это одна минута.',
       choices: () => [
-        { label: '🟢 У меня есть Happ', run: () => { state.appId = 'Happ'; go('link'); } },
-        { label: '⬇️ Приложения нет — установить INCY', run: () => { state.appId = 'INCY'; go('install'); } },
-        { label: 'У меня есть INCY', quiet: true, run: () => { state.appId = 'INCY'; go('link'); } },
+        { label: 'INCY — уже стоит',        run: () => { state.appId = 'INCY'; save(); go('link'); } },
+        { label: 'Happ — уже стоит',        run: () => { state.appId = 'Happ'; save(); go('link'); } },
+        { label: 'Другое приложение',       run: pickApp },
+        { label: '⬇️ Ничего нет — установить INCY', install: true, run: () => { state.appId = 'INCY'; save(); go('install'); } },
       ],
       alts: () => [{ label: 'у меня другое устройство', run: pickDevice }],
     },
@@ -615,46 +637,45 @@
     },
     link: {
       step: 2, back: 'choose',
-      title: () => 'Добавьте подписку в ' + currentApp(),
-      text: () => (state.phase === 'link' && !state.installedHint ? '' : '') +
-                  'Нажмите — откроется <b>' + currentApp() + '</b>, и всё добавится само.' +
+      title: () => 'Добавьте подписку в ' + appTitle(),
+      text: () => 'Нажмите — откроется <b>' + appTitle() + '</b>, и всё добавится само.' +
                   (currentApp() === 'INCY' ? '<br><br><i>Если INCY ещё ставится — дождитесь, потом нажмите.</i>' : ''),
-      cta: () => 'Добавить в ' + currentApp(),
+      cta: () => 'Добавить в ' + appTitle(),
       run: () => { sub.fetchedAt = Date.now() + 4500; saveSub(); openExternal(appInfo().add(SUB_LINK)); go('checking'); },
       alts: () => [
         { label: 'скопировать ссылку вручную', run: toManual },
-        { label: currentApp() === 'Happ' ? 'у меня всё-таки INCY' : 'у меня всё-таки Happ',
-          run: () => { state.appId = currentApp() === 'Happ' ? 'INCY' : 'Happ'; save(); paint(); } },
+        { label: 'у меня другое приложение', run: () => go('choose') },
       ],
     },
     checking: {
       step: 2, busy: true,
       title: () => 'Проверяем подключение',
-      text: () => 'Подтвердите добавление в <b>' + currentApp() + '</b> — мы увидим это сами.',
+      text: () => 'Подтвердите добавление в <b>' + appTitle() + '</b> — мы увидим это сами.',
       cta: () => 'Проверяем',
       run: () => {},
       alts: () => [
-        { label: currentApp() + ' не открылся', run: () => go('notfound') },
+        { label: appTitle() + ' не открылся', run: () => go('notfound') },
         { label: 'добавить вручную', run: toManual },
       ],
     },
     notfound: {
       step: 2, back: 'link',
       title: () => 'Пока не видим подписку',
-      text: () => currentApp() + ' её ещё не забрал. Чаще всего помогает добавить ссылку вручную' +
-                  (currentApp() === 'Happ' ? ' — или у вас всё-таки нет Happ?' : '.'),
+      text: () => appTitle() + ' её ещё не забрал. Чаще всего помогает добавить ссылку вручную' +
+                  (currentApp() !== 'INCY' ? ' — или у вас всё-таки нет ' + appTitle() + '?' : '.'),
       cta: () => 'Добавить вручную',
       run: toManual,
       alts: () => [
         { label: 'попробовать ещё раз', run: () => go('link') },
-        { label: 'у меня нет приложения — установить INCY', run: () => { state.appId = 'INCY'; go('install'); } },
+        { label: 'выбрать другое приложение', run: () => go('choose') },
+        { label: 'ничего нет — установить INCY', run: () => { state.appId = 'INCY'; save(); go('install'); } },
         CAN_TELL ? { label: 'не получается — позвать помощь', run: () => tellBot({ event: 'failed' }) } : null,
       ],
     },
     manual: {
       step: 2, back: 'link',
-      title: () => 'Вставьте ссылку в ' + currentApp(),
-      text: () => 'Ссылка уже скопирована. В приложении найдите «Добавить подписку» или кнопку «+» и вставьте её.',
+      title: () => 'Вставьте ссылку в ' + (currentApp() === 'other' ? 'приложение' : appTitle()),
+      text: () => 'Ссылка уже скопирована. В приложении найдите «Добавить подписку», «Импорт» или кнопку «+» и вставьте её.',
       cta: () => 'Скопировать ещё раз',
       ghost: true,
       run: () => { copy(SUB_LINK, 'Ссылка скопирована'); startWatch(); },
@@ -668,9 +689,10 @@
       title: () => 'Готово',
       text: () => (lastClient ? '<b>' + lastClient + '</b> получил подписку. ' : '') +
                   (currentApp() === 'INCY' ? 'Нажмите кнопку — INCY включит VPN сам.'
-                                           : 'Откройте Happ и нажмите в нём «Подключить».'),
-      secondary: () => currentApp() === 'INCY' ? 'Включить VPN в INCY' : 'Открыть Happ',
-      run: () => openExternal(appInfo().open),
+                   : appInfo().open ? 'Откройте ' + appTitle() + ' и нажмите в нём «Подключить».'
+                   : 'Откройте приложение и нажмите в нём «Подключить».'),
+      secondary: () => currentApp() === 'INCY' ? 'Включить VPN в INCY' : (appInfo().open ? 'Открыть ' + appTitle() : null),
+      run: () => { if (appInfo().open) openExternal(appInfo().open); },
       alts: () => [
         CAN_TELL ? { label: 'готово — вернуться в бот', run: () => tellBot({ event: 'connected' }) } : null,
         { label: 'настроить другое устройство', run: () => { sub.fetchedAt = null; saveSub(); pickDevice(); } },
@@ -726,13 +748,14 @@
       const box = document.createElement('div'); box.className = 'choice';
       p.choices().forEach((c) => {
         const b = document.createElement('button'); b.type = 'button';
-        b.className = c.quiet ? 'linkish' : 'btn ' + (c.label.startsWith('🟢') ? 'btn-solid' : 'btn-ghost');
+        b.className = 'btn ' + (c.install ? 'btn-solid' : 'btn-ghost');
+        if (c.install) b.style.marginTop = '10px';     // отдельно от «уже стоит»
         b.textContent = c.label; b.addEventListener('click', () => { buzz('medium'); c.run(); });
         box.appendChild(b);
       });
       step.appendChild(box);
     }
-    if (p.secondary) {
+    if (p.secondary && p.secondary()) {
       const b = document.createElement('button'); b.type = 'button'; b.className = 'btn btn-ghost';
       b.textContent = p.secondary(); b.addEventListener('click', () => { buzz('medium'); p.run(); }); step.appendChild(b);
     }
