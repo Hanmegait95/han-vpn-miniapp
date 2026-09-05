@@ -29,7 +29,7 @@ import urllib.request
 
 TOKEN_FILE = os.path.expanduser('~/.config/hanvpn/bot_token')
 MINIAPP_URL = 'https://hanproject.ru/vpnminiapp/'
-BUTTON_TEXT = 'Личный кабинет'
+BUTTON_TEXT = 'Подключить VPN'
 
 COMMANDS = [
     ('start', 'Открыть личный кабинет'),
@@ -103,12 +103,16 @@ def apply(token):
     # API отвечает ok, но значение не всегда сохраняется: кнопку с мини-аппой
     # Telegram надёжно принимает только из @BotFather. Проверяем честно.
     back = call(token, 'getChatMenuButton')
-    if back.get('type') == 'web_app':
-        print('кнопка меню → %s' % MINIAPP_URL)
+    same = (back.get('type') == 'web_app'
+            and back.get('text') == BUTTON_TEXT
+            and back.get('web_app', {}).get('url') == MINIAPP_URL)
+    if same:
+        print('кнопка меню → «%s» %s' % (BUTTON_TEXT, MINIAPP_URL))
     else:
-        print('кнопка меню: API принял запрос, но значение не сохранилось.')
+        print('кнопка меню: API принял запрос, но сохранилось не то:')
+        print('             сейчас «%s» → %s' % (back.get('text'), back.get('web_app', {}).get('url')))
         print('             поставьте вручную: @BotFather → /mybots → бот →')
-        print('             Bot Settings → Menu Button → %s' % MINIAPP_URL)
+        print('             Bot Settings → Menu Button → %s, подпись «%s»' % (MINIAPP_URL, BUTTON_TEXT))
 
     call(token, 'setMyCommands', {
         'commands': [{'command': c, 'description': d} for c, d in COMMANDS]

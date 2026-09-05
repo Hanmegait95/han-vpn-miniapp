@@ -294,10 +294,16 @@ def answer(token, cq, text=None, alert=False):
     call(token, 'answerCallbackQuery', payload)
 
 
+# TODO: оплата — sendInvoice со Stars, когда будут настоящие цены.
+# Пока «Купить» не упирается в глухую всплывашку, а ведёт к человеку.
+def act_buy(token, cq):
+    answer(token, cq, 'Оплата через бота скоро появится. Пока подключим вручную — напишите нам.')
+    msg = cq['message']
+    edit_screen(token, msg['chat']['id'], msg['message_id'], 'support', cq['from'])
+
+
 ACTIONS = {
-    # TODO: оплата. Внутри мини-аппы это tg.openInvoice, ссылку выдаёт бэк.
-    'buy': 'Оплата ещё не подключена.',
-    'refstats': 'Статистика приглашений появится вместе с базой платежей.',
+    'refstats': 'Скоро здесь будет список тех, кто пришёл по вашей ссылке.',
 }
 
 
@@ -328,7 +334,10 @@ def on_callback(token, cq):
         return
 
     key = data[2:].split(':')[0]
-    answer(token, cq, ACTIONS.get(key, 'Раздел ещё не подключён.'), alert=True)
+    if key == 'buy':
+        act_buy(token, cq)
+        return
+    answer(token, cq, ACTIONS.get(key, 'Этот раздел ещё в работе.'), alert=True)
 
 
 def on_message(token, msg):
@@ -389,6 +398,17 @@ def handle(token, update):
 CHECK_EVERY = 15 * 60          # как часто обходим пользователей
 SILENT_AFTER_TRIAL = timedelta(hours=1)
 
+# Часовой пояс Telegram не отдаёт. Аудитория российская — считаем по Москве:
+# ночью не пишем, а время называем относительно («через 9 часов»),
+# чтобы не врать про часы.
+MSK = timezone(timedelta(hours=3))
+QUIET_FROM, QUIET_TO = 23, 9
+
+
+def quiet_now():
+    h = datetime.now(MSK).hour
+    return h >= QUIET_FROM or h < QUIET_TO
+
 
 def notify(token, chat_id, banner, text, buttons):
     fid = banner_id(token, chat_id, banner)
@@ -414,12 +434,11 @@ def due_notifications(uid, rec, p, now):
             and not store.was_notified(uid, 'connect', stamp)):
         out.append(('connect', stamp, 'howto-banner.png',
                     '🔌 <b>Остался один шаг</b>\n\n'
-                    'Подписка у вас есть, но устройство ещё не настроено — '
-                    'VPN пока не работает.\n\n'
-                    '<blockquote><i>Это одна минута: приложение поставится само, '
-                    'ключ подставится тоже.</i></blockquote>',
-                    [[{'text': '🔌 Подключить', 'web_app': S.MINIAPP_URL}],
-                     [{'text': '📘 Инструкция', 'callback_data': 'n:howto'}]]))
+                    'Три бесплатных дня уже идут, а VPN ещё не включён. '
+                    'Давайте настроим — это одна минута.\n\n'
+                    '<blockquote>👇 Нажмите кнопку, дальше подскажем, что делать.</blockquote>',
+                    [[{'text': S.CONNECT, 'web_app': S.MINIAPP_URL}],
+                     [{'text': '❓ Не понятно — помогите', 'callback_data': 'n:support'}]]))
 
     if not exp:
         return out
@@ -430,18 +449,19 @@ def due_notifications(uid, rec, p, now):
     if timedelta(0) < left <= timedelta(hours=24) and not store.was_notified(uid, 'expiring', stamp):
         hours = max(1, int(left.total_seconds() // 3600))
         out.append(('expiring', stamp, 'expiring-banner.png',
-                    '⏳ <b>Осталось %d ч</b>\n\n'
-                    'Подписка закончится %s. Продлите заранее, '
-                    'чтобы не остаться без связи.'
-                    % (hours, exp.strftime('%d.%m в %H:%M')),
-                    [[{'text': '🛒 Продлить', 'callback_data': 'n:tariffs'}]]))
+                    '⏳ <b>VPN отключится через %d %s</b>\n\n'
+                    'Подписка заканчивается. Продлите сейчас — '
+                    'и ничего не прервётся.'
+                    % (hours, S.plural(hours, 'час', 'часа', 'часов')),
+                    [[{'text': '🛒 Продлить подписку', 'callback_data': 'n:tariffs'}]]))
 
     # 3. Кончилась
     if left <= timedelta(0) and not store.was_notified(uid, 'expired', stamp):
         out.append(('expired', stamp, 'expired-banner.png',
-                    '🔴 <b>VPN отключен</b>\n\n'
-                    'Подписка закончилась %s. Восстановить доступ — минута.'
-                    % exp.strftime('%d.%m.%Y'),
+                    '🔴 <b>VPN отключён</b>\n\n'
+                    'Подписка закончилась %s. Продлите — '
+                    'и всё заработает снова, настраивать заново не нужно.'
+                    % S.human_date(exp),
                     [[{'text': '🛒 Продлить подписку', 'callback_data': 'n:tariffs'}]]))
     return out
 
@@ -450,6 +470,8 @@ def notifier(token):
     """Фоновый обход. Без Remnawave данных нет — тогда просто ничего не шлём."""
     while True:
         time.sleep(CHECK_EVERY)
+        if quiet_now():
+            continue      # ночью молчим; отметок не ставим — отправим утром
         try:
             now = datetime.now(timezone.utc)
             for uid, rec in store.all_users().items():
