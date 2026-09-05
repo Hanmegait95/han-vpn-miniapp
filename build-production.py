@@ -2,14 +2,10 @@
 """
 Собирает production/index.html из index.html.
 
-Из прототипа убирается вся демонстрационная обвязка:
-  · панель состояний <aside class="proto"> и её стили;
-  · корпус телефона (.stage / .device / .scroll) — в бою страница
-    занимает окно целиком, рамка нужна была только для показа;
-  · заглушка API и захардкоженные строки статусов.
-
-Вместо заглушки подставляется рабочий fetch и расчёт подписи из
-expires_at. Места, где нужен ваш адрес, помечены TODO.
+Прототип держит состояние подписки в адресе (kind/until от бота)
+и в памяти браузера. Сборка заменяет этот блок на два запроса к бэку
+по initData: статус и включение бесплатных дней; оплату оставляет
+как TODO под tg.openInvoice. Места, где нужен ваш адрес, помечены TODO.
 
     python3 build-production.py
 """
@@ -43,257 +39,91 @@ def must_replace_all(s, old, new, label):
     return must_replace(s, old, new, label, count=-1)
 
 
-DATA_LAYER = '''  /* ── Бэкенд ─────────────────────────────────────
-     Один запрос. Авторизация — подписанным initData из Telegram;
-     проверять подпись обязательно на сервере, идентификатор из тела
-     запроса брать нельзя.
+DATA_LAYER = """  /* ── Бэкенд ─────────────────────────────────────
+     Два запроса, оба авторизуются подписанным initData из Telegram;
+     подпись проверять на сервере, идентификатор из тела брать нельзя.
 
-     Ответ:
-       { expires_at:        ISO | null,     // когда заканчивается; null — подписки нет
-         unlimited:         bool,           // бессрочная — вместо даты «Бессрочная»
-         period_days:       number,         // длина оплаченного периода, для шкалы
-         subscription_url:  string,         // ссылка подписки
-         config_fetched_at: ISO | null,     // когда клиент забрал конфиг
-         last_client:       string | null } // чем забрали, из user-agent
+       GET  /miniapp/status  → { kind: 'new'|'trial'|'paid',
+                                 expires_at: ISO | null,       // null — подписки нет
+                                 subscription_url: string,
+                                 config_fetched_at: ISO | null, // когда клиент забрал конфиг
+                                 last_client: string | null }
+       POST /miniapp/trial   → включить бесплатные дни
+       оплата — tg.openInvoice(url) со ссылкой на счёт от бэка (TODO) */
 
-     config_fetched_at — то, на чём держится весь мастер: мини-апка не
-     наблюдает за приложением (в вебвью Telegram это ненадёжно), она
-     спрашивает сервер, забрали ли подписку. */
+  const API_URL   = '/miniapp/status';                                     // TODO
+  const TRIAL_URL = '/miniapp/trial';                                      // TODO
+  const TRIAL_DAYS = 3;
+  const TARIFFS = [
+    { id: 'm1', title: '1 месяц',  price: '199 ₽',  days: 30 },            // TODO: цены
+    { id: 'm3', title: '3 месяца', price: '449 ₽',  days: 90 },
+    { id: 'y1', title: 'Год',      price: '1490 ₽', days: 365 },
+  ];
+  let SUB_LINK = '';               // приходит с бэка вместе со статусом
+  const sub = { kind: 'new', until: null, fetchedAt: null };
+  function loadSub() {}            // в бою состояние только с бэка
+  function saveSub() {}
 
-  const API_URL       = '/miniapp/status';                                  // TODO: свой адрес
-  const DOWNLOAD_URL  = (device) => 'https://example.com/download/' + device; // TODO
-  const OPEN_APP_URL  = (app) => 'https://example.com/open/' + app;           // TODO
-
-  let SUB_LINK = '';   // приходит с бэка вместе со статусом
-
-  async function fetchStatus() {
-    const res = await fetch(API_URL, {
-      cache: 'no-store',
-      headers: { 'X-Telegram-Init-Data': (tg && tg.initData) || '' }
-    });
-    if (!res.ok) throw new Error('status ' + res.status);
-    return res.json();
-  }
-
-  /* ── Статус подписки ────────────────────────────
-     Из ответа бэка собирается то, что рисуется в шапке экрана. */
-  const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
-                  'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
-
-  const fmtDate = (iso) => {
-    const d = new Date(iso);
-    return d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear();
-  };
-
-  const fmtTime = (iso) => {
-    const d = new Date(iso);
-    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-  };
-
-  function plural(n, one, few, many) {
-    const a = Math.abs(n) % 100, b = a % 10;
-    if (a > 10 && a < 20) return many;
-    if (b > 1 && b < 5) return few;
-    return b === 1 ? one : many;
-  }
-
-  const RENEW = { label: 'Продлить подписку', alarm: false };
-
-  const TRIAL_URL = '/miniapp/trial';                                       // TODO: свой адрес
-
-  /* Бесплатные дни включаются и отсюда — если человек нажал «Подключить»
-     раньше, чем «3 дня бесплатно» в боте. POST с initData, потом перечитываем статус. */
-  async function activateTrial() {
-    try {
-      const res = await fetch(TRIAL_URL, { method: 'POST', cache: 'no-store',
-        headers: { 'X-Telegram-Init-Data': (tg && tg.initData) || '' } });
+  const headers = () => ({ 'X-Telegram-Init-Data': (tg && tg.initData) || '' });
+  const API = {
+    async status() {
+      const res = await fetch(API_URL, { cache: 'no-store', headers: headers() });
+      if (!res.ok) throw new Error('status ' + res.status);
+      const p = await res.json();
+      SUB_LINK = p.subscription_url || SUB_LINK;
+      return p;
+    },
+    async trial() {
+      const res = await fetch(TRIAL_URL, { method: 'POST', cache: 'no-store', headers: headers() });
       if (!res.ok) throw new Error('trial ' + res.status);
-      cheer(); toast('3 дня бесплатно включены');
-      trialHere = true;
-      state.phase = 'install';
-    } catch (e) {
-      toast('Не удалось включить. Попробуйте ещё раз');
-    }
-    boot();
-  }
+    },
+    async pay(plan) {
+      // TODO: ссылку на счёт выдаёт бэк; tg.openInvoice(url, status => …)
+      toast('Оплата ещё не подключена');
+      throw new Error('payments not wired');
+    },
+  };
 
-  function describe(p) {
-    if (!p.unlimited && !p.expires_at) {
-      return { name: 'none', beacon: 'нет подписки', cmd: 'han --trial',
-               top: '3 дня', bottom: 'бесплатно',
-               note: 'Подписки пока нет. Включите бесплатные дни — карта не нужна',
-               pct: 0, val: '—',
-               renew: { label: 'Включить 3 дня бесплатно', alarm: false, run: activateTrial } };
-    }
-    if (p.unlimited) {
-      return { name: 'active', beacon: 'активна', cmd: 'han --status',
-               top: 'Подписка', bottom: 'активна',
-               note: 'Бессрочная', pct: 100, val: '∞', renew: null };
-    }
-
-    const left = new Date(p.expires_at).getTime() - Date.now();
-
-    if (left <= 0) {
-      return { name: 'off', beacon: 'истекла', cmd: 'han --status',
-               top: 'VPN', bottom: 'отключен',
-               note: 'Подписка закончилась ' + fmtDate(p.expires_at),
-               pct: 6, val: 'offline',
-               renew: { label: RENEW.label, alarm: true } };
-    }
-
-    const hours = left / 3600000;
-    const period = (p.period_days || 30) * 86400000;
-    const pct = Math.max(4, Math.min(100, Math.round(left / period * 100)));
-
-    if (hours < 24) {
-      const h = Math.max(1, Math.round(hours));
-      return { name: 'soon', beacon: 'истекает', cmd: 'han --expires',
-               top: 'Осталось', bottom: h + ' ' + plural(h, 'час', 'часа', 'часов'),
-               note: 'Отключится в ' + fmtTime(p.expires_at),
-               pct, val: fmtTime(p.expires_at),
-               renew: { label: RENEW.label, alarm: false } };
-    }
-
-    const d = Math.round(hours / 24);
-    return { name: 'active', beacon: 'активна', cmd: 'han --status',
-             top: 'Подписка', bottom: 'активна',
-             note: 'Действует до ' + fmtDate(p.expires_at),
-             pct, val: d + ' ' + plural(d, 'день', 'дня', 'дней'),
-             renew: null };
-  }
-
-  let status = null;      // последний describe()
-  let lastClient = null;
-
-  function paintState(view) {
-    status = view;
-    app.dataset.state = view.name;
-    $('beaconText').textContent = view.beacon;
-    $('statusCmd').textContent = view.cmd;
-    $('headTop').textContent = view.top;
-    $('headBottom').textContent = view.bottom;
-    $('statusNote').textContent = view.note;
-    $('railFill').style.setProperty('--pct', view.pct + '%');
-    $('railVal').textContent = view.val;
-    app.removeAttribute('data-connect-open');
-    paint();
-  }
-
-  /* TODO: оплата. Внутри мини-аппы это tg.openInvoice(url, cb),
-     ссылку на счёт выдаёт бэк. Пока — переход в бота. */
-  const renew = () => { buzz('medium'); toast('Открываем оплату'); };
-'''
-
+"""
 
 def main():
     s = io.open(SRC, encoding='utf-8').read()
 
-    # ── стили обвязки ───────────────────────────────────────────
-    s = cut(s, '  /* ── Оболочка прототипа ', '  @media (max-width: 359px)',
-            'стили панели и корпуса')
-    s = must_replace(
-        s,
-        '    padding-bottom: 260px;  /* кнопка главного действия + панель прототипа */',
-        '    padding-bottom: 110px;  /* место под кнопку главного действия */',
-        'отступ под панель')
+    # ── слой данных: заглушка → бэк ─────────────────────────────
+    s = cut(s, '  /* ── Бэкенд ─────', '  /* ── Статус ─────', 'заглушка бэка')
+    s = must_replace(s, '  /* ── Статус ─────', DATA_LAYER + '  /* ── Статус ─────', 'вставка слоя данных')
 
-    # ── разметка обвязки ────────────────────────────────────────
-    for tag in ('<div class="stage">\n', '<div class="device">\n', '<div class="scroll">\n',
-                '</div><!-- /scroll -->\n', '</div><!-- /device -->\n', '</div><!-- /stage -->\n'):
-        s = must_replace(s, tag, '', 'обёртка ' + tag.strip())
-    s = cut(s, '<aside class="proto"', '<script>', 'панель состояний')
+    # ── ссылки наружу ───────────────────────────────────────────
+    s = must_replace(s, "  const DOWNLOAD_URL = (device) => 'https://hanvpn.app/download/incy/' + device;   // TODO: ваш редирект в магазин",
+                     "  const DOWNLOAD_URL = (device) => 'https://example.com/download/incy/' + device;    // TODO: ваш редирект в магазин",
+                     'ссылка на загрузку')
 
-    # ── слой данных ─────────────────────────────────────────────
-    s = cut(s, '  /* ── Бэкенд ─────', '  /* ── Устройство и приложение ───', 'заглушка API')
-    s = must_replace(s, '  /* ── Устройство и приложение ───',
-                     DATA_LAYER + '\n  /* ── Устройство и приложение ───', 'вставка слоя данных')
+    # ── оплата: без сервера не притворяемся, что оплатили ──────
+    s = must_replace(s, """        await API.pay(t);
+        paidHere = t.id; cheer();""",
+"""        try { await API.pay(t); } catch (e) { return; }
+        paidHere = t.id; cheer();""", 'оплата')
+    s = must_replace(s, """    await API.trial();
+    trialHere = true; cheer();""",
+"""    try { await API.trial(); } catch (e) { toast('Не удалось включить. Попробуйте ещё раз'); return; }
+    trialHere = true; cheer();""", 'триал')
 
-    # ── обработчики панели ──────────────────────────────────────
-    s = cut(s, '  /* ── Панель прототипа ───', '  /* ── Старт ───', 'обработчики панели')
-
-    # ── статус: вместо трёх готовых состояний — расчёт из ответа ─
-    s = must_replace(
-        s,
-        "    return (statusName === 'off' || statusName === 'none') && !app.hasAttribute('data-connect-open');",
-        "    return !!status && (status.name === 'off' || status.name === 'none') && !app.hasAttribute('data-connect-open');",
-        'wizardHidden')
-    s = must_replace_all(s, '    const s = STATES[statusName];', '    const s = status;',
-                         'обращения к STATES')
-    s = must_replace(s, "alarm: statusName === 'off'", "alarm: status.name === 'off'", 'alarm при скрытом мастере')
-
-    # ── ссылки наружу и запуск ──────────────────────────────────
-    s = must_replace(s, "openExternal('https://hanvpn.app/download/' + state.device)",
-                     'openExternal(DOWNLOAD_URL(state.device))', 'ссылка на загрузку')
-    s = must_replace(s, "openExternal('https://hanvpn.app/open/' + currentApp().toLowerCase())",
-                     'openExternal(OPEN_APP_URL(currentApp().toLowerCase()))', 'ссылка на приложение')
-    s = must_replace(s, "        demo.fetchedAt = Date.now() + 4500;   // заглушка: бэк «увидит» через 4.5 с\n", '',
-                     'заглушка ожидания')
-    s = must_replace(s, "    demo.fetchedAt = Date.now() + 7000;   // заглушка ручного пути\n", '',
-                     'заглушка ручного пути')
-    s = must_replace(s, "        { label: 'настроить другое устройство', run: () => { demo.fetchedAt = null; pickDevice(); } }",
-                     "        { label: 'настроить другое устройство', run: pickDevice }",
-                     'сброс в done')
-
-    # якорь берём подлиннее: короткий совпадает раньше, внутри renderWizard
-    tail = '\n  if (tg && tg.BackButton) {\n    tg.BackButton.onClick'
-    boot_old = s[s.index('  async function boot() {'):s.index(tail)]
-    boot_new = '''  async function boot() {
-    const raw = await load();
-    if (raw) { try { Object.assign(state, JSON.parse(raw)); } catch (e) {} }
-
-    // Бот открывает мини-аппу сразу на нужном устройстве: ?platform=ios.
-    // Явный выбор важнее сохранённого состояния и «уже настроено» с сервера.
-    const want = new URLSearchParams(location.search).get('platform');
-    if (want && DEVICES[want]) {
-      state.device = want; state.appId = null; state.phase = 'install';
-    }
-
-    let payload;
-    try {
-      payload = await fetchStatus();
-    } catch (e) {
-      // Показать ошибку честно и дать повторить — пустой экран хуже.
+    # ── ошибка сети: честный экран вместо пустого ───────────────
+    s = must_replace(s, """    loadSub();
+    const st = await API.status();""",
+"""    loadSub();
+    let st;
+    try { st = await API.status(); }
+    catch (e) {
       paintState({ name: 'off', beacon: 'нет связи', cmd: 'han --status',
                    top: 'Не удалось', bottom: 'загрузить',
-                   note: 'Проверьте интернет и попробуйте ещё раз',
-                   pct: 6, val: 'error',
-                   renew: { label: 'Повторить', alarm: false, run: () => boot() } });
+                   note: 'Проверьте интернет и попробуйте ещё раз', pct: 6, val: 'error',
+                   renew: { label: 'Повторить', run: () => boot() } });
       return;
-    }
-
-    SUB_LINK = payload.subscription_url;
-    if (payload.config_fetched_at && !want) {
-      lastClient = payload.last_client;
-      state.phase = 'done';
-    } else if (state.phase === 'checking') {
-      state.phase = 'link';   // вернулись в середине ожидания — начинаем заново
-    }
-    paintState(describe(payload));
-  }
-
-'''
-    if not boot_old:
-        sys.exit('пустой срез boot() — якорь совпал не там')
-    s = s.replace(boot_old, boot_new, 1)
-
-    s = must_replace(s, '''  // ссылку со #soon / #off / #ready можно вставить в адрес на лету
-  window.addEventListener('hashchange', () => {
-    stopWatch();
-    demo.fetchedAt = null;
-    demo.state = 'active';
-    state.phase = 'install';
-    readHash();
-    markChips();
-    boot();
-  });
-
-  readHash();
-  markChips();
-  boot();''', '  boot();', 'запуск')
+    }""", 'ошибка сети')
 
     # ── проверки ────────────────────────────────────────────────
-    leftovers = [w for w in ('demo.', 'markChips', 'readHash', 'writeHash', 'statusName',
-                             'STATES', 'protoReset', 'class="proto', 'class="stage', 'class="device')
+    leftovers = [w for w in ("Q.get('kind')", 'han.sub', 'sub.hanvpn.app', 'class="proto', 'class="stage')
                  if w in s]
     if leftovers:
         sys.exit('в продакшен-версии осталась обвязка: ' + ', '.join(leftovers))

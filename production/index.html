@@ -161,6 +161,19 @@
   /* Подписки ещё нет: подключать нечего, сначала бесплатные дни */
   [data-state="none"] #prog, [data-state="none"] #wiz, [data-state="none"] #showConnect { display: none; }
   [data-state="none"] .beacon { background: var(--mute); box-shadow: none; }
+  /* шторка тарифов */
+  .plans { display: flex; flex-direction: column; gap: 8px; }
+  .plans button {
+    appearance: none; cursor: pointer; text-align: left;
+    background: var(--ink); border: 1px solid var(--line); color: var(--cream);
+    padding: 14px 14px; display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    font-family: var(--sans); font-size: var(--t-3); font-weight: 700;
+  }
+  .plans button small { font-family: var(--mono); font-size: var(--t-1); color: var(--mute); letter-spacing: .08em; text-transform: uppercase; }
+  .plans button b { font-family: var(--mono); font-weight: 500; color: var(--green); }
+  .plans button:hover { border-color: var(--green-dim); }
+  .plans button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+  .choice { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
 
   .prog { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
   .prog-bar { display: flex; gap: 4px; flex: 1; }
@@ -319,6 +332,7 @@
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
     <h3 id="sheetTitle">Устройство</h3>
     <div class="grid" id="sheetGrid"></div>
+    <div class="plans" id="sheetPlans" hidden></div>
   </div>
 </div>
 
@@ -331,6 +345,7 @@
 
 <!-- Панель прототипа. На телефоне — свёрнутая плашка снизу,
      на большом экране — колонка рядом с корпусом. -->
+
 <script>
 (() => {
   'use strict';
@@ -343,151 +358,128 @@
   const has = (ver) => !!(tg && tg.isVersionAtLeast && tg.isVersionAtLeast(ver));
   const buzz = (k) => { try { tg.HapticFeedback.impactOccurred(k || 'light'); } catch (e) {} };
   const cheer = () => { try { tg.HapticFeedback.notificationOccurred('success'); } catch (e) {} };
-
   const $ = (id) => document.getElementById(id);
   const app = $('app');
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const Q = new URLSearchParams(location.search);
 
-  /* Наружу — только через Telegram: из вебвью прямой переход по схеме
-     вроде happ:// обычно не срабатывает. Ссылка должна быть https на
-     наш домен, а редирект на схему делает уже внешний браузер. */
-  /* Открыты из постоянной клавиатуры бота (?src=kb) — значит можем
-     ответить боту через sendData: он узнает, чем кончилось подключение,
-     и сам предложит помощь. Из инлайн-кнопок sendData не работает —
-     тогда этих ссылок просто нет. */
-  const FROM_KB = new URLSearchParams(location.search).get('src') === 'kb'
-                  && !!(tg && tg.sendData);
-  let trialHere = false;   // бесплатные дни включили в этом окне — скажем боту
+  /* Кто открыл: имя из Telegram — чтобы экран говорил с человеком, а не с «пользователем» */
+  const TG_USER = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) || null;
+  const NAME = TG_USER ? (TG_USER.first_name || TG_USER.username || '') : '';
+
+  /* Открыты из клавиатуры бота (?src=kb) — можем ответить боту через sendData.
+     Из инлайн-кнопок sendData недоступен: тогда сообщаем при следующем удобном случае. */
+  const CAN_TELL = Q.get('src') === 'kb' && !!(tg && tg.sendData);
+  let trialHere = false;
+  let paidHere = null;
   function tellBot(payload) {
-    try { tg.sendData(JSON.stringify(Object.assign({ device: state.device, phase: state.phase, trial: trialHere }, payload))); }
-    catch (e) {}
+    if (!(tg && tg.sendData)) return false;
+    try {
+      tg.sendData(JSON.stringify(Object.assign(
+        { device: state.device, phase: state.phase, trial: trialHere, paid: paidHere }, payload)));
+      return true;
+    } catch (e) { return false; }
   }
 
+  /* Наружу. https — через Telegram; схемы приложений (happ://, incy://) —
+     прямым переходом: вебвью передаёт их системе. Если приложение не
+     стоит, ничего не произойдёт — на этот случай рядом всегда ручной путь. */
   function openExternal(url) {
-    if (tg && tg.openLink) tg.openLink(url);
-    else window.open(url, '_blank', 'noopener');
+    if (/^https?:/i.test(url)) {
+      if (tg && tg.openLink) tg.openLink(url); else window.open(url, '_blank', 'noopener');
+    } else {
+      location.href = url;
+    }
   }
 
   /* ── Бэкенд ─────────────────────────────────────
-     Один запрос. Авторизация — подписанным initData из Telegram;
-     проверять подпись обязательно на сервере, идентификатор из тела
-     запроса брать нельзя.
+     Два запроса, оба авторизуются подписанным initData из Telegram;
+     подпись проверять на сервере, идентификатор из тела брать нельзя.
 
-     Ответ:
-       { expires_at:        ISO | null,     // когда заканчивается; null — подписки нет
-         unlimited:         bool,           // бессрочная — вместо даты «Бессрочная»
-         period_days:       number,         // длина оплаченного периода, для шкалы
-         subscription_url:  string,         // ссылка подписки
-         config_fetched_at: ISO | null,     // когда клиент забрал конфиг
-         last_client:       string | null } // чем забрали, из user-agent
+       GET  /miniapp/status  → { kind: 'new'|'trial'|'paid',
+                                 expires_at: ISO | null,       // null — подписки нет
+                                 subscription_url: string,
+                                 config_fetched_at: ISO | null, // когда клиент забрал конфиг
+                                 last_client: string | null }
+       POST /miniapp/trial   → включить бесплатные дни
+       оплата — tg.openInvoice(url) со ссылкой на счёт от бэка (TODO) */
 
-     config_fetched_at — то, на чём держится весь мастер: мини-апка не
-     наблюдает за приложением (в вебвью Telegram это ненадёжно), она
-     спрашивает сервер, забрали ли подписку. */
+  const API_URL   = '/miniapp/status';                                     // TODO
+  const TRIAL_URL = '/miniapp/trial';                                      // TODO
+  const TRIAL_DAYS = 3;
+  const TARIFFS = [
+    { id: 'm1', title: '1 месяц',  price: '199 ₽',  days: 30 },            // TODO: цены
+    { id: 'm3', title: '3 месяца', price: '449 ₽',  days: 90 },
+    { id: 'y1', title: 'Год',      price: '1490 ₽', days: 365 },
+  ];
+  let SUB_LINK = '';               // приходит с бэка вместе со статусом
+  const sub = { kind: 'new', until: null, fetchedAt: null };
+  function loadSub() {}            // в бою состояние только с бэка
+  function saveSub() {}
 
-  const API_URL       = '/miniapp/status';                                  // TODO: свой адрес
-  const DOWNLOAD_URL  = (device) => 'https://example.com/download/' + device; // TODO
-  const OPEN_APP_URL  = (app) => 'https://example.com/open/' + app;           // TODO
-
-  let SUB_LINK = '';   // приходит с бэка вместе со статусом
-
-  async function fetchStatus() {
-    const res = await fetch(API_URL, {
-      cache: 'no-store',
-      headers: { 'X-Telegram-Init-Data': (tg && tg.initData) || '' }
-    });
-    if (!res.ok) throw new Error('status ' + res.status);
-    return res.json();
-  }
-
-  /* ── Статус подписки ────────────────────────────
-     Из ответа бэка собирается то, что рисуется в шапке экрана. */
-  const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
-                  'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
-
-  const fmtDate = (iso) => {
-    const d = new Date(iso);
-    return d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear();
-  };
-
-  const fmtTime = (iso) => {
-    const d = new Date(iso);
-    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-  };
-
-  function plural(n, one, few, many) {
-    const a = Math.abs(n) % 100, b = a % 10;
-    if (a > 10 && a < 20) return many;
-    if (b > 1 && b < 5) return few;
-    return b === 1 ? one : many;
-  }
-
-  const RENEW = { label: 'Продлить подписку', alarm: false };
-
-  const TRIAL_URL = '/miniapp/trial';                                       // TODO: свой адрес
-
-  /* Бесплатные дни включаются и отсюда — если человек нажал «Подключить»
-     раньше, чем «3 дня бесплатно» в боте. POST с initData, потом перечитываем статус. */
-  async function activateTrial() {
-    try {
-      const res = await fetch(TRIAL_URL, { method: 'POST', cache: 'no-store',
-        headers: { 'X-Telegram-Init-Data': (tg && tg.initData) || '' } });
+  const headers = () => ({ 'X-Telegram-Init-Data': (tg && tg.initData) || '' });
+  const API = {
+    async status() {
+      const res = await fetch(API_URL, { cache: 'no-store', headers: headers() });
+      if (!res.ok) throw new Error('status ' + res.status);
+      const p = await res.json();
+      SUB_LINK = p.subscription_url || SUB_LINK;
+      return p;
+    },
+    async trial() {
+      const res = await fetch(TRIAL_URL, { method: 'POST', cache: 'no-store', headers: headers() });
       if (!res.ok) throw new Error('trial ' + res.status);
-      cheer(); toast('3 дня бесплатно включены');
-      trialHere = true;
-      state.phase = 'install';
-    } catch (e) {
-      toast('Не удалось включить. Попробуйте ещё раз');
-    }
-    boot();
-  }
+    },
+    async pay(plan) {
+      // TODO: ссылку на счёт выдаёт бэк; tg.openInvoice(url, status => …)
+      toast('Оплата ещё не подключена');
+      throw new Error('payments not wired');
+    },
+  };
+
+  /* ── Статус ─────────────────────────────────────
+     Из ответа бэка — то, что рисуется в шапке. Даты словами, без UTC-часов. */
+  const MONTHS = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+  const fmtDate = (d) => d.getDate() + ' ' + MONTHS[d.getMonth()] + (d.getFullYear() !== new Date().getFullYear() ? ' ' + d.getFullYear() : '');
+  function plural(n, one, few, many) { const a = Math.abs(n) % 100, b = a % 10; if (a > 10 && a < 20) return many; if (b > 1 && b < 5) return few; return b === 1 ? one : many; }
+  const who = () => NAME ? NAME + ', ' : '';
 
   function describe(p) {
-    if (!p.unlimited && !p.expires_at) {
+    const RENEW = { label: 'Продлить подписку', run: openPlans };
+    if (!p.expires_at) {
       return { name: 'none', beacon: 'нет подписки', cmd: 'han --trial',
-               top: '3 дня', bottom: 'бесплатно',
-               note: 'Подписки пока нет. Включите бесплатные дни — карта не нужна',
+               top: TRIAL_DAYS + ' дня', bottom: 'бесплатно',
+               note: who() + 'подписки пока нет — включите бесплатные дни, карта не нужна',
                pct: 0, val: '—',
-               renew: { label: 'Включить 3 дня бесплатно', alarm: false, run: activateTrial } };
+               renew: { label: 'Включить ' + TRIAL_DAYS + ' дня бесплатно', run: activateTrial },
+               alt: { label: 'или купить сразу', run: openPlans } };
     }
-    if (p.unlimited) {
-      return { name: 'active', beacon: 'активна', cmd: 'han --status',
-               top: 'Подписка', bottom: 'активна',
-               note: 'Бессрочная', pct: 100, val: '∞', renew: null };
-    }
-
-    const left = new Date(p.expires_at).getTime() - Date.now();
-
+    const until = new Date(p.expires_at), left = until - Date.now();
+    const trial = p.kind === 'trial';
+    const what = trial ? 'бесплатные дни' : 'подписка';
     if (left <= 0) {
       return { name: 'off', beacon: 'истекла', cmd: 'han --status',
                top: 'VPN', bottom: 'отключен',
-               note: 'Подписка закончилась ' + fmtDate(p.expires_at),
-               pct: 6, val: 'offline',
-               renew: { label: RENEW.label, alarm: true } };
+               note: who() + (trial ? 'бесплатные дни закончились' : 'подписка закончилась ' + fmtDate(until)) + '. Оплатите — всё заработает, настраивать заново не нужно',
+               pct: 6, val: 'offline', renew: { label: trial ? 'Купить подписку' : 'Продлить подписку', alarm: true, run: openPlans } };
     }
-
     const hours = left / 3600000;
-    const period = (p.period_days || 30) * 86400000;
-    const pct = Math.max(4, Math.min(100, Math.round(left / period * 100)));
-
+    const pct = Math.max(4, Math.min(100, Math.round(left / ((trial ? TRIAL_DAYS : 30) * 86400000) * 100)));
     if (hours < 24) {
       const h = Math.max(1, Math.round(hours));
-      return { name: 'soon', beacon: 'истекает', cmd: 'han --expires',
+      return { name: 'soon', beacon: 'заканчивается', cmd: 'han --expires',
                top: 'Осталось', bottom: h + ' ' + plural(h, 'час', 'часа', 'часов'),
-               note: 'Отключится в ' + fmtTime(p.expires_at),
-               pct, val: fmtTime(p.expires_at),
-               renew: { label: RENEW.label, alarm: false } };
+               note: who() + what + ' заканчива' + (trial ? 'ются' : 'ется') + ' — продлите, и ничего не прервётся',
+               pct, val: h + ' ч', renew: { label: trial ? 'Купить подписку' : 'Продлить подписку', run: openPlans } };
     }
-
     const d = Math.round(hours / 24);
-    return { name: 'active', beacon: 'активна', cmd: 'han --status',
-             top: 'Подписка', bottom: 'активна',
-             note: 'Действует до ' + fmtDate(p.expires_at),
-             pct, val: d + ' ' + plural(d, 'день', 'дня', 'дней'),
-             renew: null };
+    return { name: 'active', beacon: trial ? 'бесплатные дни' : 'активна', cmd: 'han --status',
+             top: trial ? TRIAL_DAYS + ' дня' : 'Подписка', bottom: trial ? 'бесплатно' : 'активна',
+             note: who() + (trial ? 'бесплатные дни до ' : 'подписка оплачена до ') + fmtDate(until),
+             pct, val: d + ' ' + plural(d, 'день', 'дня', 'дней'), renew: null };
   }
 
-  let status = null;      // последний describe()
+  let status = null;
   let lastClient = null;
 
   function paintState(view) {
@@ -504,34 +496,60 @@
     paint();
   }
 
-  /* TODO: оплата. Внутри мини-аппы это tg.openInvoice(url, cb),
-     ссылку на счёт выдаёт бэк. Пока — переход в бота. */
-  const renew = () => { buzz('medium'); toast('Открываем оплату'); };
+  /* Бесплатные дни — прямо здесь. Если открыты с клавиатуры бота, сразу
+     сообщаем ему (sendData закрывает окно — бот покажет «включено, один шаг»);
+     иначе включаем локально и продолжаем, бот узнает при возврате. */
+  async function activateTrial() {
+    try { await API.trial(); } catch (e) { toast('Не удалось включить. Попробуйте ещё раз'); return; }
+    trialHere = true; cheer();
+    if (CAN_TELL && tellBot({ event: 'trial' })) return;
+    toast(TRIAL_DAYS + ' дня бесплатно включены');
+    state.phase = 'choose';
+    boot();
+  }
 
-  /* ── Устройство и приложение ──────────────────── */
+  /* Продление: шторка с тарифами. В бою вместо API.pay — tg.openInvoice. */
+  function openPlans() {
+    const box = $('sheetPlans');
+    box.replaceChildren();
+    TARIFFS.forEach((t) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.innerHTML = '<span>' + t.title + '</span><span><b>' + t.price + '</b> <small>демо</small></span>';
+      b.addEventListener('click', async () => {
+        closeSheet(); buzz('medium');
+        try { await API.pay(t); } catch (e) { return; }
+        paidHere = t.id; cheer();
+        if (CAN_TELL && tellBot({ event: 'paid', plan: t.id })) return;
+        toast('Оплачено (демо). До ' + fmtDate(sub.until));
+        boot();
+      });
+      box.appendChild(b);
+    });
+    $('sheetTitle').textContent = 'Срок подписки';
+    $('sheetGrid').hidden = true; box.hidden = false;
+    $('sheetBg').setAttribute('data-open', '');
+  }
+
+  /* ── Приложение и устройство ─────────────────────
+     Happ в России уже не скачать, но у многих он стоит. INCY — скачивается.
+     Поэтому первый вопрос мастера — не «установите», а «что у вас есть». */
+  const APPS = {
+    Happ: { title: 'Happ', add: (u) => 'happ://add/' + u,    open: 'happ://', downloadable: false },
+    INCY: { title: 'INCY', add: (u) => 'incy://import/' + u, open: 'incy://connect', downloadable: true },
+  };
+  const DOWNLOAD_URL = (device) => 'https://example.com/download/incy/' + device;    // TODO: ваш редирект в магазин
+
   const DEVICES = {
-    ios:     { short: 'iPhone',  app: 'Happ', get: 'Открыть App Store',
-               what: 'бесплатное приложение из App Store',
-               finish: 'Нажмите «Загрузить» и дождитесь, пока приложение установится.' },
-    android: { short: 'Android', app: 'Happ', get: 'Скачать Happ',
-               what: 'приложение для Android 8 и новее',
-               finish: 'Откройте скачанный файл и разрешите установку, если телефон спросит.' },
-    macos:   { short: 'macOS',   app: 'INCY', get: 'Скачать INCY',
-               what: 'приложение для Mac',
-               finish: 'Откройте скачанный файл и перетащите приложение в папку «Программы».' },
-    windows: { short: 'Windows', app: 'INCY', get: 'Скачать INCY',
-               what: 'приложение для Windows 10 и 11',
-               finish: 'Откройте скачанный файл и пройдите установку до конца.' },
-    linux:   { short: 'Linux',   app: 'INCY', get: 'Скачать INCY',
-               what: 'сборка AppImage для x86-64',
-               finish: 'Разрешите файлу запускаться и откройте его.' },
-    tv:      { short: 'TV',      app: 'Happ', get: 'Скачать Happ',
-               what: 'приложение для Android TV',
-               finish: 'Откройте скачанный файл через файловый менеджер и разрешите установку.' }
+    ios:     { short: 'iPhone',  what: 'из App Store',             finish: 'Нажмите «Загрузить» и дождитесь, пока приложение установится.' },
+    android: { short: 'Android', what: 'для Android',              finish: 'Откройте скачанный файл и разрешите установку, если телефон спросит.' },
+    macos:   { short: 'macOS',   what: 'для Mac',                  finish: 'Откройте скачанный файл и перетащите приложение в «Программы».' },
+    windows: { short: 'Windows', what: 'для Windows',              finish: 'Откройте скачанный файл и пройдите установку до конца.' },
+    linux:   { short: 'Linux',   what: 'для Linux',                finish: 'Разрешите файлу запускаться и откройте его.' },
+    tv:      { short: 'TV',      what: 'для Android TV',           finish: 'Откройте скачанный файл через файловый менеджер и разрешите установку.' },
   };
 
-  const state = { device: detectDevice(), arch: 'Apple Silicon', appId: null, phase: 'install' };
-
+  const state = { device: detectDevice(), appId: null, phase: 'choose' };
   function detectDevice() {
     const ua = navigator.userAgent;
     if (/android/i.test(ua)) return /TV|BRAVIA|AFT/i.test(ua) ? 'tv' : 'android';
@@ -541,124 +559,108 @@
     if (/Linux/i.test(ua)) return 'linux';
     return 'macos';
   }
-
   const dev = () => DEVICES[state.device];
-  const currentApp = () => (state.appId && state.appId !== 'other') ? state.appId : dev().app;
+  const currentApp = () => state.appId || 'INCY';
+  const appInfo = () => APPS[currentApp()];
 
   /* ── Сценарий ───────────────────────────────────
-     Вопросов пользователю больше нет — ни «установили?», ни «появилась
-     подписка?». Осталась инструкция и ожидание, которое закрывает бэк.
-     Экраны-развилки нужны только когда сервер ничего не увидел. */
+     choose → (install →) link → checking → done | notfound → manual.
+     Вопросов «установили?» нет: установка — инструкция на экране link,
+     а получилось ли — отвечает бэк. */
   const PHASES = {
-    install: {
+    choose: {
       step: 1,
-      title: () => 'Установите ' + currentApp(),
-      text: () => currentApp() + ' — ' + dev().what +
-                  (state.device === 'macos' ? ' на ' + state.arch : '') +
-                  '. Через него и работает VPN.',
-      cta: () => dev().get,
-      run: () => { openExternal(DOWNLOAD_URL(state.device)); go('installed'); },
-      alts: () => [
-        { label: 'у меня уже есть приложение', run: pickApp },
-        state.device === 'macos'
-          ? { label: 'у меня Mac на ' + (state.arch === 'Apple Silicon' ? 'Intel' : 'Apple Silicon'), run: flipArch }
-          : null,
-        { label: 'у меня другое устройство', run: pickDevice }
-      ]
+      title: () => 'Какое приложение у вас есть?',
+      text: () => 'VPN работает через приложение. Если ничего не стоит — поставим INCY, это одна минута.',
+      choices: () => [
+        { label: '🟢 У меня есть Happ', run: () => { state.appId = 'Happ'; go('link'); } },
+        { label: '⬇️ Приложения нет — установить INCY', run: () => { state.appId = 'INCY'; go('install'); } },
+        { label: 'У меня есть INCY', quiet: true, run: () => { state.appId = 'INCY'; go('link'); } },
+      ],
+      alts: () => [{ label: 'у меня другое устройство', run: pickDevice }],
     },
-
-    installed: {
-      step: 1, back: 'install',
-      title: () => 'Завершите установку',
-      text: () => dev().finish,
-      cta: () => 'Готово, дальше',
-      run: () => go('link')
+    install: {
+      step: 1, back: 'choose',
+      title: () => 'Установите INCY',
+      text: () => 'INCY — приложение ' + dev().what + '. Нажмите кнопку, скачается сразу.',
+      cta: () => 'Скачать INCY',
+      run: () => { openExternal(DOWNLOAD_URL(state.device)); go('link'); },
+      alts: () => [{ label: 'у меня другое устройство', run: pickDevice }],
     },
-
     link: {
-      step: 2, back: 'install',
-      title: () => 'Добавьте подписку',
-      text: () => 'Нажмите — откроется <b>' + currentApp() + '</b>, ключ подставится сам. Вводить ничего не нужно.',
-      cta: () => 'Добавить подписку',
-      run: () => {
-        openExternal(SUB_LINK);
-        go('checking');
-      },
-      alts: () => [{ label: 'добавить вручную', run: toManual }]
+      step: 2, back: 'choose',
+      title: () => 'Добавьте подписку в ' + currentApp(),
+      text: () => (state.phase === 'link' && !state.installedHint ? '' : '') +
+                  'Нажмите — откроется <b>' + currentApp() + '</b>, и всё добавится само.' +
+                  (currentApp() === 'INCY' ? '<br><br><i>Если INCY ещё ставится — дождитесь, потом нажмите.</i>' : ''),
+      cta: () => 'Добавить в ' + currentApp(),
+      run: () => { sub.fetchedAt = Date.now() + 4500; saveSub(); openExternal(appInfo().add(SUB_LINK)); go('checking'); },
+      alts: () => [
+        { label: 'скопировать ссылку вручную', run: toManual },
+        { label: currentApp() === 'Happ' ? 'у меня всё-таки INCY' : 'у меня всё-таки Happ',
+          run: () => { state.appId = currentApp() === 'Happ' ? 'INCY' : 'Happ'; save(); paint(); } },
+      ],
     },
-
     checking: {
       step: 2, busy: true,
       title: () => 'Проверяем подключение',
-      text: () => 'Добавьте подписку в <b>' + currentApp() + '</b> — мы увидим это сами, возвращаться сюда не нужно.',
+      text: () => 'Подтвердите добавление в <b>' + currentApp() + '</b> — мы увидим это сами.',
       cta: () => 'Проверяем',
       run: () => {},
       alts: () => [
-        { label: 'приложение не открылось', run: () => go('notfound') },
-        { label: 'добавить вручную', run: toManual }
-      ]
+        { label: currentApp() + ' не открылся', run: () => go('notfound') },
+        { label: 'добавить вручную', run: toManual },
+      ],
     },
-
     notfound: {
       step: 2, back: 'link',
       title: () => 'Пока не видим подписку',
-      text: () => 'Мы не увидели, чтобы ' + currentApp() + ' забрал её. Чаще всего помогает добавить ссылку вручную.',
+      text: () => currentApp() + ' её ещё не забрал. Чаще всего помогает добавить ссылку вручную' +
+                  (currentApp() === 'Happ' ? ' — или у вас всё-таки нет Happ?' : '.'),
       cta: () => 'Добавить вручную',
       run: toManual,
       alts: () => [
         { label: 'попробовать ещё раз', run: () => go('link') },
-        FROM_KB ? { label: 'не получается — позвать помощь', run: () => tellBot({ event: 'failed' }) }
-                : { label: 'написать в поддержку', run: () => toast('Открываем чат поддержки') }
-      ]
+        { label: 'у меня нет приложения — установить INCY', run: () => { state.appId = 'INCY'; go('install'); } },
+        CAN_TELL ? { label: 'не получается — позвать помощь', run: () => tellBot({ event: 'failed' }) } : null,
+      ],
     },
-
     manual: {
       step: 2, back: 'link',
-      title: () => 'Вставьте ссылку в приложение',
-      text: () => 'Ссылка уже скопирована. В приложении найдите «Добавить подписку» или кнопку «+» и вставьте её туда.',
+      title: () => 'Вставьте ссылку в ' + currentApp(),
+      text: () => 'Ссылка уже скопирована. В приложении найдите «Добавить подписку» или кнопку «+» и вставьте её.',
       cta: () => 'Скопировать ещё раз',
+      ghost: true,
       run: () => { copy(SUB_LINK, 'Ссылка скопирована'); startWatch(); },
       alts: () => [
         { label: 'готово, подписка добавилась', run: () => go('done') },
-        FROM_KB ? { label: 'не получается — позвать помощь', run: () => tellBot({ event: 'failed' }) } : null
-      ]
+        CAN_TELL ? { label: 'не получается — позвать помощь', run: () => tellBot({ event: 'failed' }) } : null,
+      ],
     },
-
     done: {
       step: 2, complete: true, ok: true,
       title: () => 'Готово',
       text: () => (lastClient ? '<b>' + lastClient + '</b> получил подписку. ' : '') +
-                  'Откройте приложение и нажмите «Подключить» — дальше оно работает само.',
-      secondary: () => 'Открыть ' + currentApp(),
-      run: () => openExternal(OPEN_APP_URL(currentApp().toLowerCase())),
+                  (currentApp() === 'INCY' ? 'Нажмите кнопку — INCY включит VPN сам.'
+                                           : 'Откройте Happ и нажмите в нём «Подключить».'),
+      secondary: () => currentApp() === 'INCY' ? 'Включить VPN в INCY' : 'Открыть Happ',
+      run: () => openExternal(appInfo().open),
       alts: () => [
-        FROM_KB ? { label: 'готово — вернуться в бот', run: () => tellBot({ event: 'connected' }) } : null,
-        { label: 'настроить другое устройство', run: pickDevice }
-      ]
-    }
+        CAN_TELL ? { label: 'готово — вернуться в бот', run: () => tellBot({ event: 'connected' }) } : null,
+        { label: 'настроить другое устройство', run: () => { sub.fetchedAt = null; saveSub(); pickDevice(); } },
+      ],
+    },
   };
 
-  /* ── Ожидание: спрашиваем бэк, а не следим за приложением ──
-     В вебвью Telegram нельзя надёжно поймать возврат из внешнего
-     приложения, и сама мини-апка может перезапуститься. Поэтому
-     единственный источник правды — сервер. */
-  const POLL_EVERY = 2500;
-  const GIVE_UP_AFTER = 30000;
+  const POLL_EVERY = 2500, GIVE_UP_AFTER = 30000;
   let watchTimer = null;
-
   function stopWatch() { clearTimeout(watchTimer); watchTimer = null; }
-
   function startWatch() {
     stopWatch();
     const until = Date.now() + GIVE_UP_AFTER;
     const tick = async () => {
       const st = await API.status();
-      if (st.config_fetched_at) {
-        lastClient = st.last_client;
-        cheer();
-        go('done');
-        return;
-      }
+      if (st.config_fetched_at) { lastClient = st.last_client; cheer(); go('done'); return; }
       if (Date.now() >= until) { go('notfound'); return; }
       watchTimer = setTimeout(tick, POLL_EVERY);
     };
@@ -667,303 +669,168 @@
 
   function go(phase) {
     if (phase !== 'checking' && phase !== 'manual') stopWatch();
-    state.phase = phase;
-    save();
-    paint();
+    state.phase = phase; save(); paint();
     if (phase === 'checking') startWatch();
     buzz('light');
   }
 
-  /* ── Отрисовка ──────────────────────────────────
-     paint() — одна точка входа: шаг, главное действие и кнопка
-     продления считаются вместе, чтобы сплошная кнопка была одна. */
+  /* ── Отрисовка ──────────────────────────────────── */
   function paint() {
-    // свёрнутая секция называет своё состояние честно
     $('showConnect').textContent = state.phase === 'done'
-      ? 'устройство настроено — настроить другое'
-      : 'настроить подключение на устройстве';
+      ? 'устройство настроено — настроить другое' : 'настроить подключение на устройстве';
     renderWizard(); paintPrimary(); paintRenew();
   }
-
   function wizardHidden() {
-    return !!status && (status.name === 'off' || status.name === 'none') && !app.hasAttribute('data-connect-open');
+    return (status && (status.name === 'off' || status.name === 'none')) && !app.hasAttribute('data-connect-open');
   }
 
   function renderWizard() {
-    const p = PHASES[state.phase] || PHASES.install;
-
+    const p = PHASES[state.phase] || PHASES.choose;
     const segs = $('prog').querySelectorAll('.prog-bar i');
     segs[0].toggleAttribute('data-on', true);
     segs[1].toggleAttribute('data-on', p.step >= 2);
     $('progTxt').textContent = p.complete ? 'Подключено' : 'Шаг ' + p.step + ' из 2';
 
-    const step = document.createElement('div');
-    step.className = 'wiz-step';
+    const step = document.createElement('div'); step.className = 'wiz-step';
+    const h = document.createElement('h3'); h.className = 'wiz-title' + (p.ok ? ' ok' : ''); h.textContent = p.title(); step.appendChild(h);
+    const t = document.createElement('p'); t.className = 'wiz-text'; t.innerHTML = p.text(); step.appendChild(t);
 
-    const h = document.createElement('h3');
-    h.className = 'wiz-title' + (p.ok ? ' ok' : '');
-    h.textContent = p.title();
-    step.appendChild(h);
-
-    const t = document.createElement('p');
-    t.className = 'wiz-text';
-    t.innerHTML = p.text();
-    step.appendChild(t);
-
-    // вторичное действие живёт в теле шага, главное — в панели снизу
-    if (p.secondary) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'btn btn-ghost';
-      b.textContent = p.secondary();
-      b.addEventListener('click', () => { buzz('medium'); p.run(); });
-      step.appendChild(b);
+    if (p.choices) {
+      // экран выбора: крупные варианты прямо в теле, главной кнопки внизу нет
+      const box = document.createElement('div'); box.className = 'choice';
+      p.choices().forEach((c) => {
+        const b = document.createElement('button'); b.type = 'button';
+        b.className = c.quiet ? 'linkish' : 'btn ' + (c.label.startsWith('🟢') ? 'btn-solid' : 'btn-ghost');
+        b.textContent = c.label; b.addEventListener('click', () => { buzz('medium'); c.run(); });
+        box.appendChild(b);
+      });
+      step.appendChild(box);
     }
-
+    if (p.secondary) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'btn btn-ghost';
+      b.textContent = p.secondary(); b.addEventListener('click', () => { buzz('medium'); p.run(); }); step.appendChild(b);
+    }
     const alts = (p.alts ? p.alts() : []).filter(Boolean);
     if (alts.length) {
-      const wrap = document.createElement('div');
-      wrap.className = 'wiz-alt';
-      alts.forEach((a) => {
-        const l = document.createElement('button');
-        l.type = 'button';
-        l.className = 'linkish';
-        l.textContent = a.label;
-        l.addEventListener('click', a.run);
-        wrap.appendChild(l);
-      });
+      const wrap = document.createElement('div'); wrap.className = 'wiz-alt';
+      alts.forEach((a) => { const l = document.createElement('button'); l.type = 'button'; l.className = 'linkish'; l.textContent = a.label; l.addEventListener('click', a.run); wrap.appendChild(l); });
       step.appendChild(wrap);
     }
-
     $('wiz').replaceChildren(step);
-
-    if (tg && tg.BackButton) {
-      if (p.back && !wizardHidden()) tg.BackButton.show(); else tg.BackButton.hide();
-    }
+    if (tg && tg.BackButton) { if (p.back && !wizardHidden()) tg.BackButton.show(); else tg.BackButton.hide(); }
   }
 
-  /* Ровно одно главное действие на экран. Что именно — зависит от того,
-     настроено ли устройство: без приложения продлевать нечего, с готовым
-     приложением единственное живое действие — продлить. */
+  /* Ровно одно главное действие на экран */
   function currentPrimary() {
     const s = status;
-    if (wizardHidden()) return { label: s.renew.label, alarm: status.name === 'off', run: s.renew.run || renew };
-
+    if (wizardHidden()) return { label: s.renew.label, alarm: s.name === 'off', run: s.renew.run };
     const p = PHASES[state.phase];
     if (state.phase !== 'done') {
-      return { label: p.cta(), busy: !!p.busy, run: p.run };
+      if (p.choices) return null;               // выбор — в теле экрана
+      return { label: p.cta(), busy: !!p.busy, run: p.run, ghost: !!p.ghost };
     }
-    if (s.renew) return { label: s.renew.label, alarm: s.renew.alarm, run: s.renew.run || renew };
-    return null;   // всё настроено и подписка активна — торопить не с чем
+    if (s.renew) return { label: s.renew.label, alarm: !!s.renew.alarm, run: s.renew.run };
+    return null;
   }
 
   let mainHandler = null;
-
   function paintPrimary() {
-    const act = currentPrimary();
-    const bar = $('mainbar');
-
+    const act = currentPrimary(); const bar = $('mainbar');
     if (tg && tg.MainButton && has('6.1')) {
-      bar.hidden = true;
-      const mb = tg.MainButton;
+      bar.hidden = true; const mb = tg.MainButton;
       if (mainHandler) { mb.offClick(mainHandler); mainHandler = null; }
       if (!act) { mb.hide(); return; }
-      mb.setParams({
-        text: act.label,
-        color: act.alarm ? '#FF2A2A' : '#22C55E',
-        text_color: act.alarm ? '#FFFFFF' : '#04140A',
-        is_active: !act.busy
-      });
+      mb.setParams({ text: act.label, color: act.alarm ? '#FF2A2A' : '#22C55E', text_color: act.alarm ? '#FFFFFF' : '#04140A', is_active: !act.busy });
       if (act.busy) mb.showProgress(false); else mb.hideProgress();
-      mainHandler = () => { buzz('medium'); act.run(); };
-      mb.onClick(mainHandler);
-      mb.show();
-      return;
+      mainHandler = () => { buzz('medium'); act.run(); }; mb.onClick(mainHandler); mb.show(); return;
     }
-
-    // вне Telegram рисуем такую же панель сами
-    bar.hidden = !act;
-    bar.replaceChildren();
-    if (!act) return;
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'btn ' + (act.alarm ? 'btn-alarm' : 'btn-solid');
-    b.disabled = !!act.busy;
-    b.textContent = act.label;
-    if (act.busy) {
-      const d = document.createElement('span');
-      d.className = 'dots';
-      d.innerHTML = '<i></i><i></i><i></i>';
-      b.appendChild(d);
-    }
-    b.addEventListener('click', () => { buzz('medium'); act.run(); });
-    bar.appendChild(b);
+    bar.hidden = !act; bar.replaceChildren(); if (!act) return;
+    const b = document.createElement('button'); b.type = 'button';
+    b.className = 'btn ' + (act.alarm ? 'btn-alarm' : act.ghost ? 'btn-ghost' : 'btn-solid');
+    b.disabled = !!act.busy; b.textContent = act.label;
+    if (act.busy) { const d = document.createElement('span'); d.className = 'dots'; d.innerHTML = '<i></i><i></i><i></i>'; b.appendChild(d); }
+    b.addEventListener('click', () => { buzz('medium'); act.run(); }); bar.appendChild(b);
   }
 
-  /* Продление показывается в статусе только тогда, когда главное
-     действие занято мастером — иначе оно уже стоит в панели снизу. */
+  /* Продление в статусе — только когда главное действие занято мастером */
   function paintRenew() {
-    const s = status;
-    const slot = $('renewSlot');
-    slot.replaceChildren();
+    const s = status; const slot = $('renewSlot'); slot.replaceChildren();
+    if (!s) return;
+    if (s.alt && wizardHidden()) {
+      const l = document.createElement('button'); l.type = 'button'; l.className = 'linkish'; l.style.marginTop = '18px';
+      l.textContent = s.alt.label; l.addEventListener('click', s.alt.run); slot.appendChild(l); return;
+    }
     if (!s.renew || wizardHidden() || state.phase === 'done') return;
-
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'btn btn-ghost';
-    b.style.marginTop = '22px';
-    b.textContent = s.renew.label;
-    b.addEventListener('click', renew);
-    slot.appendChild(b);
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'btn btn-ghost'; b.style.marginTop = '22px';
+    b.textContent = s.renew.label; b.addEventListener('click', s.renew.run); slot.appendChild(b);
   }
 
-  /* ── Шторка: устройство или приложение ─────────── */
-  const bg = $('sheetBg');
-  const grid = $('sheetGrid');
-
+  /* ── Шторка ─────────────────────────────────────── */
+  const bg = $('sheetBg'), grid = $('sheetGrid');
   function openSheet(title, items, current, onPick) {
-    $('sheetTitle').textContent = title;
-    grid.replaceChildren();
-    items.forEach((it) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = it.label;
-      b.setAttribute('aria-pressed', String(it.id === current));
-      b.addEventListener('click', () => { closeSheet(); onPick(it.id); });
-      grid.appendChild(b);
-    });
+    $('sheetTitle').textContent = title; grid.replaceChildren(); grid.hidden = false; $('sheetPlans').hidden = true;
+    items.forEach((it) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = it.label;
+      b.setAttribute('aria-pressed', String(it.id === current)); b.addEventListener('click', () => { closeSheet(); onPick(it.id); }); grid.appendChild(b); });
     bg.setAttribute('data-open', '');
   }
   const closeSheet = () => bg.removeAttribute('data-open');
-
   function pickDevice() {
-    const items = Object.entries(DEVICES).map(([id, d]) => ({ id, label: d.short }));
-    openSheet('Ваше устройство', items, state.device, (id) => {
-      state.device = id; state.appId = null; go('install');
-    });
+    openSheet('Ваше устройство', Object.entries(DEVICES).map(([id, d]) => ({ id, label: d.short })), state.device,
+      (id) => { state.device = id; go(state.appId ? 'link' : 'choose'); });
   }
-
-  function pickApp() {
-    openSheet('Какое приложение стоит?', [
-      { id: 'INCY', label: 'INCY' },
-      { id: 'Happ', label: 'Happ' },
-      { id: 'other', label: 'Другое' }
-    ], state.appId, (id) => {
-      state.appId = id;
-      if (id === 'other') toManual(); else go('link');
-    });
-  }
-
-  function toManual() {
-    copy(SUB_LINK, 'Ссылка скопирована');
-    go('manual');
-    startWatch();
-  }
-
-  function flipArch() {
-    state.arch = state.arch === 'Apple Silicon' ? 'Intel' : 'Apple Silicon';
-    save(); paint();
-    toast('Сборка для ' + state.arch);
-  }
-
+  function toManual() { copy(SUB_LINK, 'Ссылка скопирована'); sub.fetchedAt = Date.now() + 7000; saveSub(); go('manual'); startWatch(); }
   bg.addEventListener('click', (e) => { if (e.target === bg) closeSheet(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
-
-  $('showConnect').addEventListener('click', () => {
-    app.setAttribute('data-connect-open', '');
-    paint(); buzz('light');
-  });
+  $('showConnect').addEventListener('click', () => { app.setAttribute('data-connect-open', ''); paint(); buzz('light'); });
 
   /* ── Тост и копирование ─────────────────────────── */
   let toastTimer;
-  function toast(text) {
-    const t = $('toast');
-    t.textContent = text;
-    t.setAttribute('data-show', '');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.removeAttribute('data-show'), 1900);
-  }
+  function toast(text) { const t = $('toast'); t.textContent = text; t.setAttribute('data-show', ''); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.removeAttribute('data-show'), 1900); }
   async function copy(text, said) {
     try { await navigator.clipboard.writeText(text); }
-    catch (e) {
-      const ta = document.createElement('textarea');
-      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta); ta.select();
-      try { document.execCommand('copy'); } catch (err) {}
-      ta.remove();
-    }
-    buzz('light');
-    toast(said);
+    catch (e) { const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch (err) {} ta.remove(); }
+    buzz('light'); toast(said);
   }
 
-  /* ── Прогресс мастера ───────────────────────────
-     CloudStorage привязан к пользователю, а не к устройству, и переживает
-     перезапуск мини-аппы после выхода во внешнее приложение. На старых
-     клиентах откатываемся на localStorage. */
+  /* ── Прогресс мастера: CloudStorage, откат на localStorage ── */
   const KEY = 'han.setup';
   const cloud = () => (has('6.9') && tg.CloudStorage) ? tg.CloudStorage : null;
-
   function save() {
-    const raw = JSON.stringify({ device: state.device, arch: state.arch, appId: state.appId, phase: state.phase });
-    const cs = cloud();
-    if (cs) cs.setItem(KEY, raw, () => {});
+    const raw = JSON.stringify({ device: state.device, appId: state.appId, phase: state.phase });
+    const cs = cloud(); if (cs) cs.setItem(KEY, raw, () => {});
     try { localStorage.setItem(KEY, raw); } catch (e) {}
   }
-
   function load() {
     return new Promise((resolve) => {
       const fromLocal = () => { try { return localStorage.getItem(KEY); } catch (e) { return null; } };
-      const cs = cloud();
-      if (!cs) return resolve(fromLocal());
+      const cs = cloud(); if (!cs) return resolve(fromLocal());
       cs.getItem(KEY, (err, val) => resolve(err ? fromLocal() : (val || fromLocal())));
     });
   }
 
-  /* ── Старт ──────────────────────────────────────
-     Сначала спрашиваем бэк: если конфиг уже забирали, мастер показывать
-     незачем — открываемся сразу на «Готово». */
+  /* ── Старт ──────────────────────────────────────── */
   async function boot() {
     const raw = await load();
     if (raw) { try { Object.assign(state, JSON.parse(raw)); } catch (e) {} }
-
-    // Бот открывает мини-аппу сразу на нужном устройстве: ?platform=ios.
-    // Явный выбор важнее сохранённого состояния и «уже настроено» с сервера.
-    const want = new URLSearchParams(location.search).get('platform');
-    if (want && DEVICES[want]) {
-      state.device = want; state.appId = null; state.phase = 'install';
-    }
-
-    let payload;
-    try {
-      payload = await fetchStatus();
-    } catch (e) {
-      // Показать ошибку честно и дать повторить — пустой экран хуже.
+    const want = Q.get('platform');
+    if (want && DEVICES[want]) { state.device = want; state.appId = null; state.phase = 'choose'; }
+    loadSub();
+    let st;
+    try { st = await API.status(); }
+    catch (e) {
       paintState({ name: 'off', beacon: 'нет связи', cmd: 'han --status',
                    top: 'Не удалось', bottom: 'загрузить',
-                   note: 'Проверьте интернет и попробуйте ещё раз',
-                   pct: 6, val: 'error',
-                   renew: { label: 'Повторить', alarm: false, run: () => boot() } });
+                   note: 'Проверьте интернет и попробуйте ещё раз', pct: 6, val: 'error',
+                   renew: { label: 'Повторить', run: () => boot() } });
       return;
     }
-
-    SUB_LINK = payload.subscription_url;
-    if (payload.config_fetched_at && !want) {
-      lastClient = payload.last_client;
-      state.phase = 'done';
-    } else if (state.phase === 'checking') {
-      state.phase = 'link';   // вернулись в середине ожидания — начинаем заново
-    }
-    paintState(describe(payload));
+    if (st.config_fetched_at && !want) { lastClient = st.last_client; state.phase = 'done'; }
+    else if (state.phase === 'checking') state.phase = 'link';
+    if (!PHASES[state.phase]) state.phase = 'choose';
+    paintState(describe(st));
   }
 
-
-  if (tg && tg.BackButton) {
-    tg.BackButton.onClick(() => {
-      const p = PHASES[state.phase];
-      if (p && p.back) go(p.back);
-    });
-  }
-
+  if (tg && tg.BackButton) tg.BackButton.onClick(() => { const p = PHASES[state.phase]; if (p && p.back) go(p.back); });
   boot();
 })();
 </script>

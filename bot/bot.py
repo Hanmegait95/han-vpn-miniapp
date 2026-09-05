@@ -432,11 +432,24 @@ def on_web_app_data(token, msg):
     ev = data.get('event')
     print('  мини-аппа: %s от %s' % (ev, user.get('username') or user['id']))
     # Бесплатные дни включили прямо в мини-аппе — записываем, если ещё не было
-    if data.get('trial') and load_profile(user)['kind'] == 'new':
+    if (data.get('trial') or ev == 'trial') and load_profile(user)['kind'] == 'new':
         now = datetime.now(timezone.utc)
         store.update(user['id'], trial_at=now.isoformat(),
                      trial_until=(now + timedelta(days=S.TRIAL_DAYS)).isoformat())
         print('    бесплатные дни включены из мини-аппы')
+    # Оплатили в мини-аппе (демо) — продление прибавляется к остатку
+    plan_id = data.get('plan') or data.get('paid')
+    t = S.tariff(plan_id) if plan_id else None
+    if t and (ev == 'paid' or data.get('paid')):
+        p = load_profile(user)
+        base = p['until'] if p['until'] and p['until'] > p['now'] else p['now']
+        store.update(user['id'], paid_until=(base + timedelta(days=t['days'])).isoformat(),
+                     plan=t['id'], paid_at=p['now'].isoformat())
+        print('    оплата из мини-аппы: %s' % t['id'])
+    if ev in ('trial', 'paid'):
+        # Окно закрылось сразу после активации: показываем «включено, один шаг»
+        send_screen(token, chat_id, 'activated', user, replace_card=True)
+        return
     if ev == 'connected':
         store.update(user['id'], connected=True)
         send_screen(token, chat_id, 'ready', user, replace_card=True)
