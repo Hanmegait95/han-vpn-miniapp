@@ -357,9 +357,9 @@ SCREENS = {
                   'caption': activated_caption, 'buttons': activated_buttons},
     # Мини-аппа сообщила «подключился» — экран-подтверждение на своём баннере
     'ready': {'banner': 'ready-banner.png', 'back': 'home',
-              'caption': lambda p: ('🟢 <b>VPN подключён</b>\n\n'
-                                    'Всё работает. Если что-то перестанет — '
-                                    'напишите сюда или нажмите «Помощь» внизу.'
+              'caption': lambda p: ('🟢 <b>Подписка добавлена в приложение</b>\n\n'
+                                    'Включите VPN в самом приложении — кнопка «Подключить» на его '
+                                    'главном экране. Если что-то не так — «Помощь» внизу.'
                                     + ('\n\n<blockquote>%s</blockquote>' % period_line(p) if p['until'] else '')),
               'buttons': lambda p: []},
     'tariffs':  {'banner': 'tariffs-banner.png', 'back': 'home',

@@ -563,7 +563,7 @@
      Remnawave; v2RayTun, Hiddify, Streisand — по шаблону Remnawave «://import/»,
      проверить на устройствах. Для чего угодно другого — ручной путь. */
   const APPS = {
-    INCY:         { title: 'INCY',         add: (u) => 'incy://import/' + u,      open: 'incy://connect', on: ['ios','android','macos','windows','linux','tv'] },
+    INCY:         { title: 'INCY',         add: (u) => 'incy://import/' + u,      open: 'incy://',        on: ['ios','android','macos','windows','linux','tv'] },
     Happ:         { title: 'Happ',         add: (u) => 'happ://add/' + u,         open: 'happ://',        on: ['ios','android','macos','windows','linux','tv'] },
     v2RayTun:     { title: 'v2RayTun',     add: (u) => 'v2raytun://import/' + u,  open: 'v2raytun://',    on: ['ios','android','macos','windows'] },
     Hiddify:      { title: 'Hiddify',      add: (u) => 'hiddify://import/' + u,   open: 'hiddify://',     on: ['ios','android','macos','windows','linux'] },
@@ -673,16 +673,15 @@
       ],
     },
     done: {
+      /* Мини-аппа доводит до «подписка в приложении». Сам VPN человек
+         включает уже внутри INCY/Happ — отсюда его не дёргаем. */
       step: 2, complete: true, ok: true,
-      title: () => 'Готово',
-      text: () => (lastClient ? '<b>' + lastClient + '</b> получил подписку. ' : '') +
-                  (currentApp() === 'INCY' ? 'Нажмите кнопку — INCY включит VPN сам.'
-                   : appInfo().open ? 'Откройте ' + appTitle() + ' и нажмите в нём «Подключить».'
-                   : 'Откройте приложение и нажмите в нём «Подключить».'),
-      cta: () => currentApp() === 'INCY' ? 'Включить VPN' : (appInfo().open ? 'Открыть ' + appTitle() : null),
-      run: () => { if (appInfo().open) openExternal(appInfo().open); },
+      title: () => 'Подключено',
+      text: () => '<b>' + (lastClient || appTitle()) + '</b> получил подписку. ' +
+                  'Включите VPN в самом приложении — кнопка «Подключить» там, на главном экране.',
+      cta: () => CAN_TELL ? 'Готово' : null,
+      run: () => { if (CAN_TELL) tellBot({ event: 'connected' }); },
       alts: () => [
-        CAN_TELL ? { label: 'готово — вернуться в бот', run: () => tellBot({ event: 'connected' }) } : null,
         { label: 'подключить другое устройство', run: () => { sub.fetchedAt = null; saveSub(); state.installing = false; pickDevice(); } },
       ],
     },
