@@ -419,7 +419,13 @@
     if (urlApplied) return;
     urlApplied = true;
     const kind = Q.get('kind'), until = Q.get('until');
-    if (kind === 'new' && !saved) sub.kind = 'new';
+    // Бот — источник правды. Сказал «подписки нет» — память здесь устарела
+    // (базу сбросили, другой аккаунт), стираем и начинаем с чистого листа.
+    if (kind === 'new') {
+      sub.kind = 'new'; sub.until = null; sub.fetchedAt = null; saveSub();
+      state.appId = null; state.phase = 'choose'; try { localStorage.removeItem(KEY); } catch (e) {}
+      const cs = cloud(); if (cs) cs.removeItem(KEY, () => {});
+    }
     if (kind === 'trial' || kind === 'paid') { sub.kind = kind; if (until) sub.until = new Date(until + 'T21:00:00Z'); }
   }
   function saveSub() {
