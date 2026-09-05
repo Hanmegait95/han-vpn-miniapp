@@ -104,13 +104,17 @@ def main():
 """        try { await API.pay(t); } catch (e) { return; }
         paidHere = t.id; cheer();""", 'оплата')
     s = must_replace(s, """    await API.trial();
-    trialHere = true; cheer();""",
-"""    try { await API.trial(); } catch (e) { toast('Не удалось включить. Попробуйте ещё раз'); return; }
-    trialHere = true; cheer();""", 'триал')
+    trialHere = true;
+    toast(TRIAL_DAYS + ' дня бесплатно включены');
+    return API.status();""",
+"""    try { await API.trial(); } catch (e) { toast('Не удалось включить бесплатные дни'); return st; }
+    trialHere = true;
+    toast(TRIAL_DAYS + ' дня бесплатно включены');
+    return API.status();""", 'триал')
 
     # ── ошибка сети: честный экран вместо пустого ───────────────
     s = must_replace(s, """    loadSub();
-    const st = await API.status();""",
+    let st = await API.status();""",
 """    loadSub();
     let st;
     try { st = await API.status(); }
@@ -122,8 +126,14 @@ def main():
       return;
     }""", 'ошибка сети')
 
+    # ── тестовые крючки прототипа (sim=…) в бою не нужны ─────────
+    s = must_replace(s, "    } else if (!Q.has('sim')) {      // sim=… — проверка в браузере без запуска приложений",
+                     "    } else {", 'sim в openExternal')
+    s = must_replace(s, "    sub.fetchedAt = Q.get('sim') === 'fail' ? null : Date.now() + 4500; saveSub();   // sim=ok|fail — для проверки\n",
+                     "", 'sim в tryConnect')
+
     # ── проверки ────────────────────────────────────────────────
-    leftovers = [w for w in ("Q.get('kind')", 'han.sub', 'sub.hanvpn.app', 'class="proto', 'class="stage')
+    leftovers = [w for w in ("Q.get('kind')", 'han.sub', 'sub.hanvpn.app', 'sim=', "Q.has('sim')", 'class="proto', 'class="stage')
                  if w in s]
     if leftovers:
         sys.exit('в продакшен-версии осталась обвязка: ' + ', '.join(leftovers))

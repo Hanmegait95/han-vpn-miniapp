@@ -396,7 +396,7 @@
   function openExternal(url) {
     if (/^https?:/i.test(url)) {
       if (tg && tg.openLink) tg.openLink(url); else window.open(url, '_blank', 'noopener');
-    } else {
+    } else if (!Q.has('sim')) {      // sim=… — проверка в браузере без запуска приложений
       location.href = url;
     }
   }
@@ -432,7 +432,7 @@
     // (базу сбросили, другой аккаунт), стираем и начинаем с чистого листа.
     if (kind === 'new') {
       sub.kind = 'new'; sub.until = null; sub.fetchedAt = null; saveSub();
-      state.appId = null; state.phase = 'choose';
+      state.appId = null; state.phase = 'connect';
       try { localStorage.removeItem(KEY); } catch (e) {}
       try { const cs = cloud(); if (cs && cs.removeItem) cs.removeItem(KEY, () => {}); } catch (e) {}
     }
@@ -472,12 +472,12 @@
 
   function describe(p) {
     const RENEW = { label: 'Продлить подписку', run: openPlans };
-    if (!p.expires_at) {
+    if (!p.expires_at) {   // сюда попадаем только если включить дни не удалось
       return { name: 'none', beacon: 'нет подписки', cmd: 'han --trial',
                top: TRIAL_DAYS + ' дня', bottom: 'бесплатно',
                note: who() + 'подписки пока нет — включите бесплатные дни, карта не нужна',
                pct: 0, val: '—',
-               renew: { label: 'Включить ' + TRIAL_DAYS + ' дня бесплатно', run: activateTrial },
+               renew: { label: 'Включить ' + TRIAL_DAYS + ' дня бесплатно', run: () => boot() },
                alt: { label: 'или купить сразу', run: openPlans } };
     }
     const until = new Date(p.expires_at), left = until - Date.now();
@@ -522,16 +522,15 @@
     paint();
   }
 
-  /* Бесплатные дни — прямо здесь. Если открыты с клавиатуры бота, сразу
-     сообщаем ему (sendData закрывает окно — бот покажет «включено, один шаг»);
-     иначе включаем локально и продолжаем, бот узнает при возврате. */
-  async function activateTrial() {
+  /* Бесплатные дни включаются сами: человек нажал «Подключить» — намерение
+     ясно, спрашивать ещё раз незачем. Окно не закрываем (sendData закрыл бы),
+     бот узнает из поля trial при возврате; в бою — бэк узнает сразу. */
+  async function ensureTrial(st) {
+    if (st.expires_at) return st;
     await API.trial();
-    trialHere = true; cheer();
-    if (CAN_TELL && tellBot({ event: 'trial' })) return;
+    trialHere = true;
     toast(TRIAL_DAYS + ' дня бесплатно включены');
-    state.phase = 'choose';
-    boot();
+    return API.status();
   }
 
   /* Продление: шторка с тарифами. В бою вместо API.pay — tg.openInvoice. */
@@ -584,7 +583,7 @@
     tv:      { short: 'TV',      what: 'для Android TV',           finish: 'Откройте скачанный файл через файловый менеджер и разрешите установку.' },
   };
 
-  const state = { device: detectDevice(), appId: null, phase: 'choose' };
+  const state = { device: detectDevice(), appId: null, phase: 'connect', installing: false, retryReason: '' };
   function detectDevice() {
     const ua = navigator.userAgent;
     if (/android/i.test(ua)) return /TV|BRAVIA|AFT/i.test(ua) ? 'tv' : 'android';
@@ -606,74 +605,63 @@
     items.push({ id: 'other', label: 'Другое — скопировать ссылку' });
     openSheet('Какое приложение стоит?', items, state.appId, (id) => {
       state.appId = id; save();
-      if (id === 'other') toManual(); else go('link');
+      if (id === 'other') toManual(); else tryConnect();
     });
   }
 
   /* ── Сценарий ───────────────────────────────────
-     choose → (install →) link → checking → done | notfound → manual.
-     Вопросов «установили?» нет: установка — инструкция на экране link,
-     а получилось ли — отвечает бэк. */
+     Не спрашиваем то, что можно попробовать. Одна кнопка «Подключить»
+     дёргает приложение; получилось — увидит бэк. Не открылось — только
+     тогда предлагаем поставить INCY или выбрать своё.
+
+       connect → checking → done
+                     └→ retry → (установить INCY → connect) | другое → connect | manual */
+  const RETRY_AFTER = 8000;     // столько ждём открытия приложения, потом предлагаем выбор
+
+  function tryConnect() {
+    sub.fetchedAt = Q.get('sim') === 'fail' ? null : Date.now() + 4500; saveSub();   // sim=ok|fail — для проверки
+    openExternal(appInfo().add(SUB_LINK));
+    go('checking');
+  }
+
   const PHASES = {
-    choose: {
+    connect: {
       step: 1,
-      title: () => 'Чем будете подключаться?',
-      text: () => 'VPN включается через приложение. Нажмите то, что у вас <b>уже стоит</b> — или поставьте INCY, это одна минута.',
-      choices: () => [
-        { label: 'INCY — уже стоит',        run: () => { state.appId = 'INCY'; save(); go('link'); } },
-        { label: 'Happ — уже стоит',        run: () => { state.appId = 'Happ'; save(); go('link'); } },
-        { label: 'Другое приложение',       run: pickApp },
-        { label: '⬇️ Ничего нет — установить INCY', install: true, run: () => { state.appId = 'INCY'; save(); go('install'); } },
-      ],
-      alts: () => [{ label: 'у меня другое устройство', run: pickDevice }],
-    },
-    install: {
-      step: 1, back: 'choose',
-      title: () => 'Установите INCY',
-      text: () => 'INCY — приложение ' + dev().what + '. Нажмите кнопку, скачается сразу.',
-      cta: () => 'Скачать INCY',
-      run: () => { openExternal(DOWNLOAD_URL(state.device)); go('link'); },
-      alts: () => [{ label: 'у меня другое устройство', run: pickDevice }],
-    },
-    link: {
-      step: 2, back: 'choose',
-      title: () => 'Добавьте подписку в ' + appTitle(),
-      text: () => 'Нажмите — откроется <b>' + appTitle() + '</b>, и всё добавится само.' +
-                  (currentApp() === 'INCY' ? '<br><br><i>Если INCY ещё ставится — дождитесь, потом нажмите.</i>' : ''),
-      cta: () => 'Добавить в ' + appTitle(),
-      run: () => { sub.fetchedAt = Date.now() + 4500; saveSub(); openExternal(appInfo().add(SUB_LINK)); go('checking'); },
+      title: () => state.installing ? 'Установили INCY? Подключаем' : 'Подключите VPN',
+      text: () => currentApp() === 'INCY'
+        ? 'Нажмите — откроется <b>INCY</b>, подписка добавится сама. Если INCY ещё нет, покажем, где взять.'
+        : 'Нажмите — откроется <b>' + appTitle() + '</b>, подписка добавится сама.',
+      cta: () => 'Подключить',
+      run: tryConnect,
       alts: () => [
-        { label: 'скопировать ссылку вручную', run: toManual },
-        { label: 'у меня другое приложение', run: () => go('choose') },
+        { label: currentApp() === 'INCY' ? 'у меня Happ или другое приложение' : 'у меня другое приложение', run: () => go('retry') },
+        { label: 'у меня другое устройство', run: pickDevice },
       ],
     },
     checking: {
       step: 2, busy: true,
-      title: () => 'Проверяем подключение',
-      text: () => 'Подтвердите добавление в <b>' + appTitle() + '</b> — мы увидим это сами.',
+      title: () => 'Открываем ' + appTitle(),
+      text: () => 'Подтвердите добавление в приложении — мы увидим это сами.',
       cta: () => 'Проверяем',
       run: () => {},
-      alts: () => [
-        { label: appTitle() + ' не открылся', run: () => go('notfound') },
-        { label: 'добавить вручную', run: toManual },
-      ],
+      alts: () => [{ label: 'ничего не открылось', run: () => go('retry') }],
     },
-    notfound: {
-      step: 2, back: 'link',
-      title: () => 'Пока не видим подписку',
-      text: () => appTitle() + ' её ещё не забрал. Чаще всего помогает добавить ссылку вручную' +
-                  (currentApp() !== 'INCY' ? ' — или у вас всё-таки нет ' + appTitle() + '?' : '.'),
-      cta: () => 'Добавить вручную',
-      run: toManual,
+    retry: {
+      step: 1, back: 'connect',
+      title: () => state.retryReason || 'Не открылось приложение?',
+      text: () => 'Значит, его нет или стоит другое. Выберите, что подходит:',
+      choices: () => [
+        { label: '⬇️ Установить INCY', install: true, run: () => { state.installing = true; state.appId = 'INCY'; save(); openExternal(DOWNLOAD_URL(state.device)); go('connect'); } },
+        { label: 'У меня Happ', run: () => { state.appId = 'Happ'; save(); tryConnect(); } },
+        { label: 'Другое приложение', run: pickApp },
+      ],
       alts: () => [
-        { label: 'попробовать ещё раз', run: () => go('link') },
-        { label: 'выбрать другое приложение', run: () => go('choose') },
-        { label: 'ничего нет — установить INCY', run: () => { state.appId = 'INCY'; save(); go('install'); } },
+        { label: 'попробовать ещё раз', run: tryConnect },
         CAN_TELL ? { label: 'не получается — позвать помощь', run: () => tellBot({ event: 'failed' }) } : null,
       ],
     },
     manual: {
-      step: 2, back: 'link',
+      step: 2, back: 'connect',
       title: () => 'Вставьте ссылку в ' + (currentApp() === 'other' ? 'приложение' : appTitle()),
       text: () => 'Ссылка уже скопирована. В приложении найдите «Добавить подписку», «Импорт» или кнопку «+» и вставьте её.',
       cta: () => 'Скопировать ещё раз',
@@ -691,16 +679,16 @@
                   (currentApp() === 'INCY' ? 'Нажмите кнопку — INCY включит VPN сам.'
                    : appInfo().open ? 'Откройте ' + appTitle() + ' и нажмите в нём «Подключить».'
                    : 'Откройте приложение и нажмите в нём «Подключить».'),
-      secondary: () => currentApp() === 'INCY' ? 'Включить VPN в INCY' : (appInfo().open ? 'Открыть ' + appTitle() : null),
+      cta: () => currentApp() === 'INCY' ? 'Включить VPN' : (appInfo().open ? 'Открыть ' + appTitle() : null),
       run: () => { if (appInfo().open) openExternal(appInfo().open); },
       alts: () => [
         CAN_TELL ? { label: 'готово — вернуться в бот', run: () => tellBot({ event: 'connected' }) } : null,
-        { label: 'настроить другое устройство', run: () => { sub.fetchedAt = null; saveSub(); pickDevice(); } },
+        { label: 'подключить другое устройство', run: () => { sub.fetchedAt = null; saveSub(); state.installing = false; pickDevice(); } },
       ],
     },
   };
 
-  const POLL_EVERY = 2500, GIVE_UP_AFTER = 30000;
+  const POLL_EVERY = 2500, GIVE_UP_AFTER = RETRY_AFTER;
   let watchTimer = null;
   function stopWatch() { clearTimeout(watchTimer); watchTimer = null; }
   function startWatch() {
@@ -709,7 +697,7 @@
     const tick = async () => {
       const st = await API.status();
       if (st.config_fetched_at) { lastClient = st.last_client; cheer(); go('done'); return; }
-      if (Date.now() >= until) { go('notfound'); return; }
+      if (Date.now() >= until) { state.retryReason = 'Пока не видим подписку'; go('retry'); return; }
       watchTimer = setTimeout(tick, POLL_EVERY);
     };
     watchTimer = setTimeout(tick, POLL_EVERY);
@@ -733,7 +721,7 @@
   }
 
   function renderWizard() {
-    const p = PHASES[state.phase] || PHASES.choose;
+    const p = PHASES[state.phase] || PHASES.connect;
     const segs = $('prog').querySelectorAll('.prog-bar i');
     segs[0].toggleAttribute('data-on', true);
     segs[1].toggleAttribute('data-on', p.step >= 2);
@@ -774,11 +762,10 @@
     const s = status;
     if (wizardHidden()) return { label: s.renew.label, alarm: s.name === 'off', run: s.renew.run };
     const p = PHASES[state.phase];
-    if (state.phase !== 'done') {
-      if (p.choices) return null;               // выбор — в теле экрана
-      return { label: p.cta(), busy: !!p.busy, run: p.run, ghost: !!p.ghost };
-    }
+    if (p.choices) return null;                 // выбор — в теле экрана
+    if (state.phase !== 'done') return { label: p.cta(), busy: !!p.busy, run: p.run, ghost: !!p.ghost };
     if (s.renew) return { label: s.renew.label, alarm: !!s.renew.alarm, run: s.renew.run };
+    if (p.cta && p.cta()) return { label: p.cta(), run: p.run };
     return null;
   }
 
@@ -825,7 +812,7 @@
   const closeSheet = () => bg.removeAttribute('data-open');
   function pickDevice() {
     openSheet('Ваше устройство', Object.entries(DEVICES).map(([id, d]) => ({ id, label: d.short })), state.device,
-      (id) => { state.device = id; go(state.appId ? 'link' : 'choose'); });
+      (id) => { state.device = id; go('connect'); });
   }
   function toManual() { copy(SUB_LINK, 'Ссылка скопирована'); sub.fetchedAt = Date.now() + 7000; saveSub(); go('manual'); startWatch(); }
   bg.addEventListener('click', (e) => { if (e.target === bg) closeSheet(); });
@@ -845,7 +832,7 @@
   const KEY = 'han.setup';
   const cloud = () => (has('6.9') && tg.CloudStorage) ? tg.CloudStorage : null;
   function save() {
-    const raw = JSON.stringify({ device: state.device, appId: state.appId, phase: state.phase });
+    const raw = JSON.stringify({ device: state.device, appId: state.appId, phase: state.phase, installing: state.installing });
     const cs = cloud(); if (cs) cs.setItem(KEY, raw, () => {});
     try { localStorage.setItem(KEY, raw); } catch (e) {}
   }
@@ -866,12 +853,13 @@
     const raw = await load();
     if (raw) { try { Object.assign(state, JSON.parse(raw)); } catch (e) {} }
     const want = Q.get('platform');
-    if (want && DEVICES[want]) { state.device = want; state.appId = null; state.phase = 'choose'; }
+    if (want && DEVICES[want]) { state.device = want; state.phase = 'connect'; }
     loadSub();
-    const st = await API.status();
+    let st = await API.status();
+    st = await ensureTrial(st);
     if (st.config_fetched_at && !want) { lastClient = st.last_client; state.phase = 'done'; }
-    else if (state.phase === 'checking') state.phase = 'link';
-    if (!PHASES[state.phase]) state.phase = 'choose';
+    else if (state.phase === 'checking') state.phase = 'connect';
+    if (!PHASES[state.phase]) state.phase = 'connect';
     paintState(describe(st));
   }
 
