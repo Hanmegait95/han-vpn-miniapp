@@ -139,37 +139,70 @@ def banner_id(token, chat_id, name):
 
 # ── Профиль ────────────────────────────────────────────────────────
 
+def parse_dt(v):
+    try:
+        return datetime.fromisoformat(v) if v else None
+    except ValueError:
+        return None
+
+
 def load_profile(user):
     """
-    Подписка — из Remnawave. Баланса там нет: это ваша база платежей.
-    Если панель не настроена, кабинет всё равно открывается — просто
-    без данных о подписке.
+    Состояние подписки. Источник правды в прототипе — store.py; в бою
+    его место займёт ваша база платежей, а Remnawave останется источником
+    правды про доступ: срок и факт подключения.
+
+      kind   — new | trial | paid
+      phase  — active | expiring (< суток) | expired | None (для new)
+      until  — конец текущего периода
+      connected — забирали ли конфиг (Remnawave) или отметка демо
     """
+    now = datetime.now(timezone.utc)
+    rec = store.get(user['id'])
     p = {
         'name': user.get('first_name') or user.get('username') or 'без имени',
         'telegram_id': user['id'],
-        'balance': 0,
-        'subscriptions': 0,
-        'expire_at': None,
-        'sub_last_opened_at': None,
-        'online_at': None,
-        'now': datetime.now(timezone.utc),
+        'now': now,
         'referral_link': 'https://t.me/%s?start=ref%s' % (BOT_USERNAME, user['id']),
+        'kind': 'new', 'phase': None, 'until': None, 'left': None,
+        'connected': bool(rec.get('connected')),
+        'sub_last_opened_at': None, 'online_at': None,
+        'plan': S.tariff(rec.get('plan')) if rec.get('plan') else None,
     }
+
+    paid_until = parse_dt(rec.get('paid_until'))
+    trial_until = parse_dt(rec.get('trial_until'))
+    if paid_until:
+        p['kind'], p['until'] = 'paid', paid_until
+    elif trial_until:
+        p['kind'], p['until'] = 'trial', trial_until
+
+    # Remnawave знает срок и факт подключения точнее, чем локальная запись
     try:
         cfg = rw.load_config()
-    except rw.NotConfigured:
-        return p
-    try:
         found = rw.find_user(cfg, user['id'])
+    except rw.NotConfigured:
+        found = None
     except rw.RemnawaveError as e:
         print('  ! Remnawave: %s' % e)
-        return p
-    if found and found['status'] == 'ACTIVE':
-        p['subscriptions'] = 1
-        p['expire_at'] = found['expire_at']
+        found = None
+    if found:
+        if found['expire_at']:
+            p['until'] = found['expire_at']
+            if p['kind'] == 'new':
+                p['kind'] = 'trial'
         p['sub_last_opened_at'] = found['sub_last_opened_at']
         p['online_at'] = found['online_at']
+        p['connected'] = p['connected'] or bool(found['sub_last_opened_at'])
+
+    if p['until']:
+        p['left'] = p['until'] - now
+        if p['left'] <= timedelta(0):
+            p['phase'] = 'expired'
+        elif p['left'] <= timedelta(hours=24):
+            p['phase'] = 'expiring'
+        else:
+            p['phase'] = 'active'
     return p
 
 
@@ -257,29 +290,7 @@ def edit_screen(token, chat_id, message_id, name, user):
     }, quiet=True)
 
 
-# ── Молчаливый триал ───────────────────────────────────────────────
-# Человек пришёл за VPN — незачем спрашивать, хочет ли он попробовать.
-# Выдаём на /start. Повторный /start найдёт существующую учётку,
-# Remnawave привязывает её к telegram id — накрутить не выйдет.
-
-def ensure_trial(user):
-    try:
-        cfg = rw.load_config()
-    except rw.NotConfigured:
-        return None
-    try:
-        found, created = rw.create_trial(cfg, user['id'])
-    except rw.RemnawaveError as e:
-        print('  ! триал: %s' % e)
-        return None
-    if created:
-        store.update(user['id'], trial_at=datetime.now(timezone.utc).isoformat())
-        print('    выдан пробный период')
-    return found
-
-
 def show_home(token, chat_id, user):
-    ensure_trial(user)
     profile = load_profile(user)
     return send_screen(token, chat_id, S.home(profile), user, replace_card=True)
 
@@ -294,12 +305,59 @@ def answer(token, cq, text=None, alert=False):
     call(token, 'answerCallbackQuery', payload)
 
 
-# TODO: оплата — sendInvoice со Stars, когда будут настоящие цены.
-# Пока «Купить» не упирается в глухую всплывашку, а ведёт к человеку.
-def act_buy(token, cq):
-    answer(token, cq, 'Оплата через бота скоро появится. Пока подключим вручную — напишите нам.')
+def act_trial(token, cq):
+    """Явная активация бесплатных дней. Второй раз не выдаём."""
+    user, msg = cq['from'], cq['message']
+    p = load_profile(user)
+    if p['kind'] != 'new':
+        answer(token, cq, 'Бесплатные дни уже были. Дальше — подписка.', alert=True)
+        edit_screen(token, msg['chat']['id'], msg['message_id'], S.home(p), user)
+        return
+    now = datetime.now(timezone.utc)
+    until = now + timedelta(days=S.TRIAL_DAYS)
+    store.update(user['id'], trial_at=now.isoformat(), trial_until=until.isoformat())
+    # В бою здесь же — rw.create_trial(); прототип без панели работает на store.
+    try:
+        cfg = rw.load_config()
+        rw.create_trial(cfg, user['id'])
+    except (rw.NotConfigured, rw.RemnawaveError):
+        pass
+    answer(token, cq, 'Готово — %d дня бесплатно включены.' % S.TRIAL_DAYS)
+    edit_screen(token, msg['chat']['id'], msg['message_id'], 'activated', user)
+
+
+def act_buy(token, cq, plan_id):
+    if not S.tariff(plan_id):
+        answer(token, cq, 'Такого тарифа нет'); return
+    answer(token, cq)
     msg = cq['message']
-    edit_screen(token, msg['chat']['id'], msg['message_id'], 'support', cq['from'])
+    edit_screen(token, msg['chat']['id'], msg['message_id'], 'pay:' + plan_id, cq['from'])
+
+
+def act_pay(token, cq, plan_id):
+    """
+    ДЕМО. В бою: sendInvoice → pre_checkout_query → successful_payment,
+    и только после successful_payment — то, что ниже.
+    Продление прибавляется к остатку, а не съедает его.
+    """
+    t = S.tariff(plan_id)
+    if not t:
+        answer(token, cq, 'Такого тарифа нет'); return
+    user, msg = cq['from'], cq['message']
+    p = load_profile(user)
+    base = p['until'] if p['until'] and p['until'] > p['now'] else p['now']
+    until = base + timedelta(days=t['days'])
+    store.update(user['id'], paid_until=until.isoformat(), plan=plan_id,
+                 paid_at=p['now'].isoformat())
+    try:
+        cfg = rw.load_config()
+        found = rw.find_user(cfg, user['id'])
+        if found and found['uuid']:
+            rw._request(cfg, 'PATCH', '/api/users', {'uuid': found['uuid'], 'expireAt': until.isoformat()})
+    except (rw.NotConfigured, rw.RemnawaveError):
+        pass
+    answer(token, cq, 'Оплачено (демо). Работает до %s.' % S.human_date(until))
+    edit_screen(token, msg['chat']['id'], msg['message_id'], 'activated', user)
 
 
 ACTIONS = {
@@ -321,7 +379,7 @@ def on_callback(token, cq):
             return
         answer(token, cq)
         chat_id, mid = msg['chat']['id'], msg['message_id']
-        is_root = not S.SCREENS[name].get('back')
+        is_root = name in S.ROOTS
         card = store.get(user['id']).get('card_message_id')
         if is_root and card and mid != card:
             # Домой нажали не в карточке, а, например, в напоминании.
@@ -333,10 +391,14 @@ def on_callback(token, cq):
         edit_screen(token, chat_id, mid, name, user)
         return
 
-    key = data[2:].split(':')[0]
+    parts = data[2:].split(':')
+    key, arg = parts[0], (parts[1] if len(parts) > 1 else None)
+    if key == 'trial':
+        act_trial(token, cq); return
     if key == 'buy':
-        act_buy(token, cq)
-        return
+        act_buy(token, cq, arg); return
+    if key == 'pay':
+        act_pay(token, cq, arg); return
     answer(token, cq, ACTIONS.get(key, 'Этот раздел ещё в работе.'), alert=True)
 
 
@@ -355,6 +417,29 @@ def on_message(token, msg):
 
     if cmd == '/help':
         send_screen(token, msg['chat']['id'], 'howto', msg['from'])
+        return True
+
+    # Прототип: /demo new|trial|expiring|expired|paid|connected|reset
+    # переводит вашу запись в нужное состояние. В продакшене удалить.
+    if cmd == '/demo':
+        now = datetime.now(timezone.utc)
+        iso = lambda d: (now + d).isoformat()
+        presets = {
+            'new':       dict(trial_until=None, paid_until=None, plan=None, connected=False, trial_at=None),
+            'trial':     dict(trial_until=iso(timedelta(days=3)), paid_until=None, plan=None, trial_at=now.isoformat()),
+            'expiring':  dict(trial_until=iso(timedelta(hours=9)), paid_until=None, plan=None),
+            'expired':   dict(trial_until=iso(-timedelta(days=1)), paid_until=None, plan=None),
+            'paid':      dict(paid_until=iso(timedelta(days=90)), plan='m3'),
+            'connected': dict(connected=True),
+            'reset':     dict(trial_until=None, paid_until=None, plan=None, connected=False, trial_at=None, notified={}),
+        }
+        want = args[0].lower() if args else ''
+        if want not in presets:
+            call(token, 'sendMessage', {'chat_id': msg['chat']['id'],
+                 'text': 'Состояния: ' + ' · '.join(presets)})
+            return True
+        store.update(msg['from']['id'], **presets[want])
+        show_home(token, msg['chat']['id'], msg['from'])
         return True
 
     # Молчание выглядит как поломка. На любое слово отвечаем экраном,
@@ -424,45 +509,42 @@ def notify(token, chat_id, banner, text, buttons):
 def due_notifications(uid, rec, p, now):
     """Что нужно отправить этому человеку прямо сейчас. Может быть пусто."""
     out = []
-    exp = p.get('expire_at')
-    stamp = exp.isoformat() if exp else 'none'
+    if p['kind'] == 'new' or not p['until']:
+        return out
+    stamp = p['until'].isoformat()
+    trial = p['kind'] == 'trial'
 
-    # 1. Взял подписку, но так и не настроил устройство
-    trial_at = rec.get('trial_at')
-    if (p['subscriptions'] and not p.get('sub_last_opened_at') and trial_at
-            and now - datetime.fromisoformat(trial_at) > SILENT_AFTER_TRIAL
-            and not store.was_notified(uid, 'connect', stamp)):
+    # 1. Включил бесплатные дни, но за час так и не настроил устройство
+    trial_at = parse_dt(rec.get('trial_at'))
+    if (not p['connected'] and trial_at and now - trial_at > SILENT_AFTER_TRIAL
+            and p['phase'] == 'active' and not store.was_notified(uid, 'connect', stamp)):
         out.append(('connect', stamp, 'howto-banner.png',
                     '🔌 <b>Остался один шаг</b>\n\n'
-                    'Три бесплатных дня уже идут, а VPN ещё не включён. '
+                    'Бесплатные дни уже идут, а VPN ещё не включён. '
                     'Давайте настроим — это одна минута.\n\n'
                     '<blockquote>👇 Нажмите кнопку, дальше подскажем, что делать.</blockquote>',
                     [[{'text': S.CONNECT, 'web_app': S.MINIAPP_URL}],
-                     [{'text': '❓ Не понятно — помогите', 'callback_data': 'n:support'}]]))
+                     [{'text': S.HELP, 'callback_data': 'n:support'}]]))
 
-    if not exp:
-        return out
-
-    left = exp - now
-
-    # 2. Подписка кончается
-    if timedelta(0) < left <= timedelta(hours=24) and not store.was_notified(uid, 'expiring', stamp):
-        hours = max(1, int(left.total_seconds() // 3600))
+    # 2. Меньше суток
+    if p['phase'] == 'expiring' and not store.was_notified(uid, 'expiring', stamp):
         out.append(('expiring', stamp, 'expiring-banner.png',
-                    '⏳ <b>VPN отключится через %d %s</b>\n\n'
-                    'Подписка заканчивается. Продлите сейчас — '
-                    'и ничего не прервётся.'
-                    % (hours, S.plural(hours, 'час', 'часа', 'часов')),
-                    [[{'text': '🛒 Продлить подписку', 'callback_data': 'n:tariffs'}]]))
+                    '⏳ <b>VPN отключится через %s</b>\n\n%s. Оплатите сейчас — '
+                    'и ничего не прервётся, настраивать заново не придётся.'
+                    % (S.span(p['left']),
+                       'Бесплатные дни заканчиваются' if trial else 'Подписка заканчивается'),
+                    [[{'text': '💳 Купить подписку' if trial else '🛒 Продлить подписку',
+                       'callback_data': 'n:tariffs'}]]))
 
-    # 3. Кончилась
-    if left <= timedelta(0) and not store.was_notified(uid, 'expired', stamp):
+    # 3. Кончилось
+    if p['phase'] == 'expired' and not store.was_notified(uid, 'expired', stamp):
         out.append(('expired', stamp, 'expired-banner.png',
-                    '🔴 <b>VPN отключён</b>\n\n'
-                    'Подписка закончилась %s. Продлите — '
-                    'и всё заработает снова, настраивать заново не нужно.'
-                    % S.human_date(exp),
-                    [[{'text': '🛒 Продлить подписку', 'callback_data': 'n:tariffs'}]]))
+                    '🔴 <b>VPN отключён</b>\n\n%s. Оплатите — и всё заработает снова, '
+                    'настраивать заново не нужно.'
+                    % ('Бесплатные дни закончились' if trial
+                       else 'Подписка закончилась ' + S.human_date(p['until'])),
+                    [[{'text': '💳 Купить подписку' if trial else '🛒 Продлить подписку',
+                       'callback_data': 'n:tariffs'}]]))
     return out
 
 

@@ -3,20 +3,19 @@
 Экраны бота: содержимое отдельно от механики.
 
 Аудитория — люди, которые не знают слов «ключ», «соединение» и «Android».
-Поэтому правила для текста:
-  · говорим, что человек увидит и что нажать, а не как это устроено;
-  · одно действие на экран — крупно; остальное — ниже и короче;
-  · кнопка называет результат: «Подключить VPN», а не «Далее»;
-  · ничего, что выглядит как кнопка, но не нажимается;
-  · ни одного тупика: любой экран ведёт дальше или к живому человеку.
+Правила текста: говорим, что человек увидит и что нажать; одно действие
+на экран — крупно; кнопка называет результат; ничего похожего на кнопку,
+что не нажимается; ни одного тупика.
 
-Механика навигации: бот перерисовывает одно сообщение, а не шлёт новые.
+Жизненный цикл подписки (profile['kind'] + profile['phase']):
 
-Экран описывается словарём:
-    banner   — файл в assets/
-    caption  — функция profile → HTML-подпись (лимит Telegram 1024 символа)
-    buttons  — функция profile → список рядов кнопок
-    back     — куда ведёт «Назад» (у корневых экранов нет)
+    new ──активировал──▶ trial ──3 дня──▶ expiring ──▶ expired
+                                                          │
+                              ┌────── купил ◀─────────────┘
+                              ▼
+                             paid ──срок──▶ expiring ──▶ expired ──продлил──▶ paid
+
+Корневой экран и баннер выбираются по состоянию, см. home() внизу.
 
 Кнопка — один из четырёх видов:
     {'text': …, 'nav': 'screen'}   переход на другой экран
@@ -25,9 +24,10 @@
     {'text': …, 'url': url}        внешняя ссылка
 """
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 HOUR = timedelta(hours=1)
+TRIAL_DAYS = 3
 
 MINIAPP_URL = 'https://hanproject.ru/vpnminiapp/'
 CHANNEL_URL = 'https://t.me/hanvpn'          # TODO: настоящий канал
@@ -36,9 +36,11 @@ TERMS_URL = 'https://hanproject.ru/terms'    # TODO: документы
 
 # TODO: цены. На баннере «актуальные цены в боте» — значит правда живёт здесь.
 TARIFFS = [
-    {'id': 'm3', 'title': '3 месяца', 'price': '449 ₽',  'note': 'выгодно'},
-    {'id': 'y1', 'title': 'Год',      'price': '1490 ₽', 'note': 'ещё выгоднее'},
+    {'id': 'm1', 'title': '1 месяц',  'price': '199 ₽',  'days': 30,  'note': 'попробовать'},
+    {'id': 'm3', 'title': '3 месяца', 'price': '449 ₽',  'days': 90,  'note': 'выгодно'},
+    {'id': 'y1', 'title': 'Год',      'price': '1490 ₽', 'days': 365, 'note': 'ещё выгоднее'},
 ]
+CHEAPEST = TARIFFS[0]
 
 # TODO: реальная сумма за приглашённого.
 REFERRAL_REWARD = '300 ₽'
@@ -55,6 +57,7 @@ PLATFORMS = [
 BACK = '‹ Назад'
 HOME = '🏠 Кабинет'
 CONNECT = '🔌 Подключить VPN'
+HELP = '❓ Не понятно — помогите'
 
 MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
           'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря']
@@ -65,7 +68,14 @@ def esc(s):
 
 
 def human_date(d):
-    return '%d %s' % (d.day, MONTHS[d.month - 1])
+    # Экран не должен падать из-за пустой даты — лучше прочерк, чем ошибка.
+    if not d:
+        return '—'
+    text = '%d %s' % (d.day, MONTHS[d.month - 1])
+    # «до 7 декабря» через год выглядит как ошибка — уточняем год, если он не текущий
+    if d.year != datetime.now(timezone.utc).year:
+        text += ' %d' % d.year
+    return text
 
 
 def plural(n, one, few, many):
@@ -78,91 +88,110 @@ def plural(n, one, few, many):
     return one if b == 1 else many
 
 
-def ago(delta):
-    m = int(delta.total_seconds() // 60)
-    if m < 1:
-        return 'только что'
-    if m < 60:
-        return '%d %s назад' % (m, plural(m, 'минуту', 'минуты', 'минут'))
-    h = m // 60
-    if h < 24:
-        return '%d %s назад' % (h, plural(h, 'час', 'часа', 'часов'))
+def span(delta):
+    """«через 9 часов», «через 2 дня» — без часов по UTC, которые врут."""
+    if delta is None:
+        return '—'
+    h = int(delta.total_seconds() // 3600)
+    if h < 1:
+        m = max(1, int(delta.total_seconds() // 60))
+        return '%d %s' % (m, plural(m, 'минуту', 'минуты', 'минут'))
+    if h < 48:
+        return '%d %s' % (h, plural(h, 'час', 'часа', 'часов'))
     d = h // 24
-    return '%d %s назад' % (d, plural(d, 'день', 'дня', 'дней'))
+    return '%d %s' % (d, plural(d, 'день', 'дня', 'дней'))
+
+
+def ago(delta):
+    return span(delta) + ' назад'
 
 
 def miniapp(platform=None):
     return MINIAPP_URL + ('?platform=' + platform if platform else '')
 
 
-# ── Первый экран новичка ───────────────────────────────────────────
+def tariff(pid):
+    return next((t for t in TARIFFS if t['id'] == pid), None)
+
+
+# ── Новичок: VPN ещё не активирован ────────────────────────────────
 
 def welcome_caption(p):
-    if p['subscriptions']:
-        gift = ('🎁 <b>3 дня бесплатно — уже включены</b>\n'
-                'Работают до %s. Платить не нужно.' % human_date(p['expire_at']))
-    else:
-        gift = '🎁 <b>Первые 3 дня — бесплатно.</b>\nПлатить не нужно.'
     return (
         '<b>Han VPN</b>\n\n'
         'Открывает сайты и приложения, которые без VPN не работают. '
         'Без ограничений по скорости и объёму.\n\n'
-        '<blockquote>%s</blockquote>\n'
-        '👇 Нажмите кнопку — покажем, что скачать, и всё настроим. '
-        'Займёт одну минуту.'
-    ) % gift
+        '<blockquote>🎁 <b>Первые %d дня — бесплатно.</b>\n'
+        'Карта не нужна. Потом — от %s в месяц, если понравится.</blockquote>\n'
+        '👇 Нажмите кнопку, чтобы включить бесплатные дни.'
+    ) % (TRIAL_DAYS, CHEAPEST['price'])
 
 
 def welcome_buttons(p):
-    # У новичка одна задача — подключиться. Вторая кнопка — живой человек,
-    # если что-то непонятно. Остальное найдётся потом, в кабинете.
     return [
-        [{'text': CONNECT, 'web_app': miniapp()}],
-        [{'text': '❓ Не понятно — помогите', 'nav': 'support'}],
+        [{'text': '🎁 Включить %d дня бесплатно' % TRIAL_DAYS, 'act': 'trial'}],
+        [{'text': '💳 Сколько стоит потом', 'nav': 'tariffs'},
+         {'text': HELP, 'nav': 'support'}],
     ]
 
 
-# ── Кабинет ────────────────────────────────────────────────────────
+# ── Только что активировали или оплатили ───────────────────────────
+
+def activated_caption(p):
+    if p['kind'] == 'trial':
+        head = ('🎉 <b>Бесплатные %d дня включены</b>\n'
+                'Работают до %s. Платить не нужно.' % (TRIAL_DAYS, human_date(p['until'])))
+    else:
+        head = ('🎉 <b>Подписка оплачена</b>\n'
+                'Работает до %s.' % human_date(p['until']))
+    step = ('Остался один шаг — включить VPN на телефоне. '
+            'Нажмите кнопку: покажем, что скачать, и всё настроим. Одна минута.'
+            if not p['connected'] else
+            'VPN уже настроен — ничего делать не нужно, всё продолжает работать.')
+    return '%s\n\n<blockquote>👇 %s</blockquote>' % (head, step)
+
+
+def activated_buttons(p):
+    if not p['connected']:
+        return [[{'text': CONNECT, 'web_app': miniapp()}],
+                [{'text': HELP, 'nav': 'support'}]]
+    return [[{'text': '🏠 В кабинет', 'nav': 'home'}]]
+
+
+# ── Кабинет: подписка действует ────────────────────────────────────
 
 def connection_line(p):
-    """
-    Подписка и VPN на телефоне — разные вещи, и человек хочет знать
-    именно второе: работает ли у него сейчас. Говорим прямо: включён
-    или нет, и что сделать.
-    """
-    if not p.get('sub_last_opened_at'):
+    if not p['connected']:
         return ('🔴 VPN на этом устройстве ещё не включён',
                 'Нажмите «Подключить VPN» — займёт одну минуту.')
     if p.get('online_at') and p['online_at'] > p['now'] - HOUR:
-        return ('🟢 VPN работает',
-                'Всё в порядке, ничего делать не нужно.')
+        return ('🟢 VPN работает', 'Всё в порядке, ничего делать не нужно.')
     if p.get('online_at'):
-        return ('🟡 VPN не включён уже %s' % ago(p['now'] - p['online_at']).replace(' назад', ''),
+        return ('🟡 VPN не включён уже %s' % span(p['now'] - p['online_at']),
                 'Откройте приложение VPN и нажмите в нём «Подключить». '
                 'Не получается — напишите нам, поможем.')
-    return ('🟡 VPN настроен, но ещё ни разу не включался',
-            'Откройте приложение VPN и нажмите в нём «Подключить».')
+    return ('🟢 VPN настроен', 'Откройте приложение VPN и нажмите в нём «Подключить».')
+
+
+def period_line(p):
+    if p['kind'] == 'trial':
+        return ('🎁 Бесплатные дни — до <b>%s</b>. Потом от %s в месяц.'
+                % (human_date(p['until']), CHEAPEST['price']))
+    return 'Подписка оплачена до <b>%s</b>' % human_date(p['until'])
 
 
 def cabinet_caption(p):
     state, hint = connection_line(p)
-    if p.get('expire_at'):
-        paid = 'Подписка оплачена до <b>%s</b>' % human_date(p['expire_at'])
-    else:
-        paid = 'Подписка активна'
-    return (
-        '👤 <b>%s</b>\n\n'
-        '<b>%s</b>\n%s\n\n'
-        '<blockquote>👉 %s</blockquote>'
-    ) % (esc(p['name']), state, paid, hint)
+    return ('👤 <b>%s</b>\n\n<b>%s</b>\n%s\n\n<blockquote>👉 %s</blockquote>'
+            % (esc(p['name']), state, period_line(p), hint))
 
 
 def cabinet_buttons(p):
-    # Первая кнопка — то, что нужно сделать прямо сейчас.
-    if not p.get('sub_last_opened_at'):
+    if not p['connected']:
         rows = [[{'text': CONNECT, 'web_app': miniapp()}]]
     else:
-        rows = [[{'text': '🛒 Продлить подписку', 'nav': 'tariffs'}],
+        rows = [[{'text': ('💳 Купить подписку' if p['kind'] == 'trial' else '🛒 Продлить подписку'),
+                  'nav': 'tariffs'}],
                 [{'text': '➕ Подключить ещё телефон или ноутбук', 'web_app': miniapp()}]]
     rows += [
         [{'text': '🎁 Пригласить друга', 'nav': 'referral'}],
@@ -172,7 +201,50 @@ def cabinet_buttons(p):
     return rows
 
 
-# ── Тарифы ─────────────────────────────────────────────────────────
+# ── Истекает: меньше суток ─────────────────────────────────────────
+
+def expiring_caption(p):
+    what = 'Бесплатные дни заканчиваются' if p['kind'] == 'trial' else 'Подписка заканчивается'
+    return (
+        '⏳ <b>VPN отключится через %s</b>\n\n'
+        '%s. Оплатите сейчас — и ничего не прервётся, '
+        'настраивать заново не придётся.\n\n'
+        '<blockquote>👇 Выберите срок — от %s в месяц.</blockquote>'
+    ) % (span(p['left']), what, CHEAPEST['price'])
+
+
+def expiring_buttons(p):
+    rows = [[{'text': '💳 Купить подписку' if p['kind'] == 'trial' else '🛒 Продлить подписку',
+              'nav': 'tariffs'}]]
+    if not p['connected']:
+        rows.append([{'text': CONNECT, 'web_app': miniapp()}])
+    rows.append([{'text': '❓ Помощь', 'nav': 'info'}])
+    return rows
+
+
+# ── Истёк ──────────────────────────────────────────────────────────
+
+def expired_caption(p):
+    what = ('Бесплатные %d дня закончились' % TRIAL_DAYS if p['kind'] == 'trial'
+            else 'Подписка закончилась %s' % human_date(p['until']))
+    return (
+        '🔴 <b>VPN отключён</b>\n\n'
+        '%s. Чтобы включить снова, оплатите подписку.\n\n'
+        '<blockquote>Настраивать заново не нужно: оплатите — '
+        'и всё заработает как раньше.</blockquote>\n'
+        '👇 От %s в месяц.'
+    ) % (what, CHEAPEST['price'])
+
+
+def expired_buttons(p):
+    return [
+        [{'text': '💳 Купить подписку' if p['kind'] == 'trial' else '🛒 Продлить подписку',
+          'nav': 'tariffs'}],
+        [{'text': '❓ Помощь', 'nav': 'info'}],
+    ]
+
+
+# ── Тарифы и оплата ────────────────────────────────────────────────
 
 def tariffs_caption(p):
     rows = '\n'.join('<b>%s</b> — %s  · %s' % (t['title'], t['price'], t['note'])
@@ -186,6 +258,25 @@ def tariffs_caption(p):
 def tariffs_buttons(p):
     return [[{'text': '%s — %s' % (t['title'], t['price']), 'act': 'buy:' + t['id']}]
             for t in TARIFFS]
+
+
+def pay_screen(t):
+    def caption(p):
+        # Продление добавляется к остатку, а не съедает его.
+        base = p['until'] if p['until'] and p['until'] > p['now'] else p['now']
+        until = base + timedelta(days=t['days'])
+        return ('💳 <b>%s — %s</b>\n\n'
+                'После оплаты VPN будет работать до <b>%s</b>.\n\n'
+                '<blockquote>Оплата картой или Telegram Stars. '
+                'Подписка не продлевается сама — спишем только то, что вы выбрали.</blockquote>\n'
+                '👇 Нажмите «Оплатить».') % (t['title'], t['price'], human_date(until))
+
+    return {
+        'banner': 'tariffs-banner.png', 'back': 'tariffs',
+        'caption': caption,
+        # TODO: в бою — sendInvoice. Пока кнопка помечена как демо.
+        'buttons': lambda p: [[{'text': '💳 Оплатить %s (демо)' % t['price'], 'act': 'pay:' + t['id']}]],
+    }
 
 
 # ── Как настроить ──────────────────────────────────────────────────
@@ -206,11 +297,11 @@ def howto_buttons(p):
 
 def referral_caption(p):
     return ('🎁 <b>Пригласите друга</b>\n\n'
-            'Отправьте другу вашу ссылку. Он получит 3 дня бесплатно, '
+            'Отправьте другу вашу ссылку. Он получит %d дня бесплатно, '
             'а когда оплатит подписку — вы получите <b>%s</b>.\n\n'
             '<blockquote>Ваша ссылка:\n<code>%s</code></blockquote>\n'
             '👇 Нажмите «Отправить другу» — откроется список чатов.'
-            ) % (REFERRAL_REWARD, esc(p['referral_link']))
+            ) % (TRIAL_DAYS, REFERRAL_REWARD, esc(p['referral_link']))
 
 
 def referral_buttons(p):
@@ -245,7 +336,6 @@ def info_buttons(p):
 
 
 def support_caption(p):
-    # ID живёт здесь, а не в кабинете: он нужен ровно в момент обращения.
     return ('💬 <b>Поддержка</b>\n\n'
             'Ответим и поможем с настройкой. '
             'Выберите, что случилось, или сразу напишите нам.\n\n'
@@ -254,8 +344,6 @@ def support_caption(p):
 
 
 def support_buttons(p):
-    # Раньше эти три пункта были текстом и выглядели как кнопки —
-    # люди в них тыкали. Теперь это кнопки, и каждая куда-то ведёт.
     return [
         [{'text': '🔌 Не подключается', 'web_app': miniapp()}],
         [{'text': '💳 Вопрос по оплате', 'url': SUPPORT_URL}],
@@ -265,40 +353,29 @@ def support_buttons(p):
 
 
 SCREENS = {
-    'welcome': {
-        'banner': 'unlimited-banner.png',
-        'caption': welcome_caption, 'buttons': welcome_buttons,
-    },
-    'cabinet': {
-        'banner': 'cabinet-banner.png',
-        'caption': cabinet_caption, 'buttons': cabinet_buttons,
-    },
-    'tariffs': {
-        'banner': 'tariffs-banner.png', 'back': 'home',
-        'caption': tariffs_caption, 'buttons': tariffs_buttons,
-    },
-    'howto': {
-        'banner': 'howto-banner.png', 'back': 'home',
-        'caption': howto_caption, 'buttons': howto_buttons,
-    },
-    'referral': {
-        'banner': 'referral-banner.png', 'back': 'home',
-        'caption': referral_caption, 'buttons': referral_buttons,
-    },
-    'info': {
-        'banner': 'info-banner.png', 'back': 'home',
-        'caption': info_caption, 'buttons': info_buttons,
-    },
-    'support': {
-        'banner': 'support-banner.png', 'back': 'info',
-        'caption': support_caption, 'buttons': support_buttons,
-    },
+    # корневые — выбираются по состоянию, см. home()
+    'welcome':  {'banner': 'unlimited-banner.png', 'caption': welcome_caption,  'buttons': welcome_buttons},
+    'cabinet':  {'banner': 'cabinet-banner.png',   'caption': cabinet_caption,  'buttons': cabinet_buttons},
+    'expiring': {'banner': 'expiring-banner.png',  'caption': expiring_caption, 'buttons': expiring_buttons},
+    'expired':  {'banner': 'expired-banner.png',   'caption': expired_caption,  'buttons': expired_buttons},
+
+    'activated': {'banner': 'unlimited-banner.png', 'back': 'home',
+                  'caption': activated_caption, 'buttons': activated_buttons},
+    'tariffs':  {'banner': 'tariffs-banner.png', 'back': 'home',
+                 'caption': tariffs_caption, 'buttons': tariffs_buttons},
+    'howto':    {'banner': 'howto-banner.png', 'back': 'home',
+                 'caption': howto_caption, 'buttons': howto_buttons},
+    'referral': {'banner': 'referral-banner.png', 'back': 'home',
+                 'caption': referral_caption, 'buttons': referral_buttons},
+    'info':     {'banner': 'info-banner.png', 'back': 'home',
+                 'caption': info_caption, 'buttons': info_buttons},
+    'support':  {'banner': 'support-banner.png', 'back': 'info',
+                 'caption': support_caption, 'buttons': support_buttons},
     'channel': {
         'banner': 'channel-banner.png', 'back': 'info',
         'caption': lambda p: ('📣 <b>Новости и статус серверов</b>\n\n'
-                              'Если VPN вдруг перестал работать — '
-                              'загляните в канал: там пишем, что случилось '
-                              'и когда починим.\n\n'
+                              'Если VPN вдруг перестал работать — загляните в канал: '
+                              'там пишем, что случилось и когда починим.\n\n'
                               '<blockquote>👇 Нажмите «Открыть канал» и подпишитесь, '
                               'чтобы не пропустить.</blockquote>'),
         'buttons': lambda p: [[{'text': '📣 Открыть канал', 'url': CHANNEL_URL}]],
@@ -312,13 +389,18 @@ SCREENS = {
         'buttons': lambda p: [[{'text': '📄 Открыть документы', 'url': TERMS_URL}]],
     },
 }
+for _t in TARIFFS:
+    SCREENS['pay:' + _t['id']] = pay_screen(_t)
+
+ROOTS = ('welcome', 'cabinet', 'expiring', 'expired')
 
 
-def home(profile):
-    """
-    Корневой экран зависит от человека, а не от кнопки.
-    Новичок — это не «без подписки» (триал выдаётся молча, подписка
-    есть у всех), а «ни разу не подключался». Ему — рассказ и одна
-    кнопка. Кто уже подключался — тому статус.
-    """
-    return 'cabinet' if profile.get('sub_last_opened_at') else 'welcome'
+def home(p):
+    """Корневой экран — по состоянию подписки, а не по кнопке."""
+    if p['kind'] == 'new':
+        return 'welcome'
+    if p['phase'] == 'expired':
+        return 'expired'
+    if p['phase'] == 'expiring':
+        return 'expiring'
+    return 'cabinet'
