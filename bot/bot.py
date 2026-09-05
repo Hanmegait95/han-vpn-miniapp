@@ -191,11 +191,16 @@ def keyboard(screen, profile):
                 btn['url'] = b['url']
             out.append(btn)
         rows.append(out)
+    # Домой — с любого экрана в одно нажатие. «Назад» показываем только
+    # когда он ведёт не домой, иначе две кнопки делали бы одно и то же.
     if screen.get('back'):
-        back = screen['back']
-        if back == 'home':
-            back = S.home(profile)
-        rows.append([{'text': S.BACK, 'callback_data': 'n:' + back}])
+        home = S.home(profile)
+        back = home if screen['back'] == 'home' else screen['back']
+        nav = []
+        if back != home:
+            nav.append({'text': S.BACK, 'callback_data': 'n:' + back})
+        nav.append({'text': S.HOME, 'callback_data': 'n:home'})
+        rows.append(nav)
     return {'inline_keyboard': rows}
 
 
@@ -309,7 +314,17 @@ def on_callback(token, cq):
             answer(token, cq, 'Экран не найден')
             return
         answer(token, cq)
-        edit_screen(token, msg['chat']['id'], msg['message_id'], name, user)
+        chat_id, mid = msg['chat']['id'], msg['message_id']
+        is_root = not S.SCREENS[name].get('back')
+        card = store.get(user['id']).get('card_message_id')
+        if is_root and card and mid != card:
+            # Домой нажали не в карточке, а, например, в напоминании.
+            # Не плодим второй кабинет: это сообщение убираем, карточку обновляем.
+            call(token, 'deleteMessage', {'chat_id': chat_id, 'message_id': mid}, quiet=True)
+            if not edit_screen(token, chat_id, card, name, user):
+                send_screen(token, chat_id, name, user, replace_card=True)
+            return
+        edit_screen(token, chat_id, mid, name, user)
         return
 
     key = data[2:].split(':')[0]
