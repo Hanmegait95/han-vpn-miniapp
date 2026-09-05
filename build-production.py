@@ -218,6 +218,13 @@ def main():
     const raw = await load();
     if (raw) { try { Object.assign(state, JSON.parse(raw)); } catch (e) {} }
 
+    // Бот открывает мини-аппу сразу на нужном устройстве: ?platform=ios.
+    // Явный выбор важнее сохранённого состояния и «уже настроено» с сервера.
+    const want = new URLSearchParams(location.search).get('platform');
+    if (want && DEVICES[want]) {
+      state.device = want; state.appId = null; state.phase = 'install';
+    }
+
     let payload;
     try {
       payload = await fetchStatus();
@@ -232,7 +239,7 @@ def main():
     }
 
     SUB_LINK = payload.subscription_url;
-    if (payload.config_fetched_at) {
+    if (payload.config_fetched_at && !want) {
       lastClient = payload.last_client;
       state.phase = 'done';
     } else if (state.phase === 'checking') {
