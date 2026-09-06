@@ -235,12 +235,14 @@ def keyboard(screen, profile):
                 btn['web_app'] = {'url': b['web_app']}
             elif 'url' in b:
                 btn['url'] = b['url']
+            S.decorate(btn, b.get('style'))
             out.append(btn)
         rows.append(out)
     # «Назад» на каждом экране, кроме корневых: ведёт на шаг выше.
     # «Кабинет» — на нижней клавиатуре, здесь не дублируем.
     if screen.get('back'):
         back = S.home(profile) if screen['back'] == 'home' else screen['back']
+        # «Назад» намеренно без цвета: спорить с главной кнопкой ей незачем
         rows.append([{'text': S.BACK, 'callback_data': 'n:' + back}])
     return {'inline_keyboard': rows}
 
@@ -523,10 +525,12 @@ def on_message(token, msg):
     cmd = parts[0].split('@')[0].lower() if parts else ''
     args = parts[1:]
 
-    # кнопки постоянной клавиатуры приходят обычным текстом
-    if text == S.KB_HOME:
+    # Кнопки постоянной клавиатуры приходят обычным текстом. Значок уехал
+    # в icon_custom_emoji_id, поэтому подпись приходит без него — принимаем
+    # оба вида, чтобы работали и клавиатуры, разосланные раньше.
+    if text in (S.KB_HOME, S.label(S.KB_HOME)):
         show_home(token, msg['chat']['id'], msg['from']); return True
-    if text == S.KB_HELP:
+    if text in (S.KB_HELP, S.label(S.KB_HELP)):
         send_screen(token, msg['chat']['id'], 'help', msg['from']); return True
 
     if cmd == '/stats' and msg['from']['id'] in ADMINS:
@@ -538,7 +542,8 @@ def on_message(token, msg):
     if cmd == '/connect':
         call(token, 'sendMessage', {'chat_id': msg['chat']['id'], 'parse_mode': 'HTML',
              'text': S.animate('👇 Нажмите, чтобы подключить VPN'),
-             'reply_markup': {'inline_keyboard': [[{'text': S.CONNECT, 'web_app': {'url': S.miniapp()}}]]}})
+             'reply_markup': {'inline_keyboard': [[S.decorate(
+                 {'text': S.CONNECT, 'web_app': {'url': S.miniapp()}}, S.SUCCESS)]]}})
         return True
 
     if cmd == '/start':
@@ -650,6 +655,7 @@ def notify(token, chat_id, banner, text, buttons):
     fid = banner_id(token, chat_id, banner)
     if not fid:
         return None
+    buttons = [[S.decorate(b, b.pop('style', None)) for b in row] for row in buttons]
     return call(token, 'sendPhoto', {
         'chat_id': chat_id, 'photo': fid, 'caption': S.animate(text),
         'parse_mode': 'HTML',
@@ -674,8 +680,9 @@ def due_notifications(uid, rec, p, now):
                     'Бесплатные дни уже идут, а VPN ещё не включён. '
                     'Давайте настроим — это одна минута.\n\n'
                     '<blockquote>👇 Нажмите кнопку, дальше подскажем, что делать.</blockquote>',
-                    [[{'text': S.CONNECT, 'web_app': {'url': S.miniapp(None, p)}}],
-                     [{'text': S.HELP, 'callback_data': 'n:help'}]]))
+                    [[{'text': S.CONNECT, 'web_app': {'url': S.miniapp(None, p)},
+                       'style': S.SUCCESS}],
+                     [{'text': S.HELP, 'callback_data': 'n:help', 'style': S.DANGER}]]))
 
     # 2. Меньше суток
     if p['phase'] == 'expiring' and not store.was_notified(uid, 'expiring', stamp):
@@ -684,8 +691,8 @@ def due_notifications(uid, rec, p, now):
                     'и ничего не прервётся, настраивать заново не придётся.'
                     % (S.span(p['left']),
                        'Бесплатные дни заканчиваются' if trial else 'Подписка заканчивается'),
-                    [[{'text': '💳 Купить подписку' if trial else '🛒 Продлить подписку',
-                       'callback_data': 'n:tariffs'}]]))
+                    [[{'text': S.BUY if trial else S.RENEW,
+                       'callback_data': 'n:tariffs', 'style': S.SUCCESS}]]))
 
     # 3. Кончилось
     if p['phase'] == 'expired' and not store.was_notified(uid, 'expired', stamp):
@@ -694,8 +701,8 @@ def due_notifications(uid, rec, p, now):
                     'настраивать заново не нужно.'
                     % ('Бесплатные дни закончились' if trial
                        else 'Подписка закончилась ' + S.human_date(p['until'])),
-                    [[{'text': '💳 Купить подписку' if trial else '🛒 Продлить подписку',
-                       'callback_data': 'n:tariffs'}]]))
+                    [[{'text': S.BUY if trial else S.RENEW,
+                       'callback_data': 'n:tariffs', 'style': S.SUCCESS}]]))
     return out
 
 

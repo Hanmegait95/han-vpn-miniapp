@@ -48,11 +48,13 @@ TRIAL_DEVICES = 1          # бесплатные дни — на одно ус�
 REFERRAL_REWARD = '300 ₽'
 
 # Человек знает марку телефона, а не название системы. Подсказываем.
+# У 🍎 нет анимированной пары, поэтому ноутбуки помечены одинаково —
+# их различает подпись, а не значок.
 PLATFORMS = [
     ('ios',     '📱 iPhone / iPad'),
     ('android', '🤖 Android-телефон'),
     ('windows', '💻 Windows (ноутбук, ПК)'),
-    ('macos',   '🍎 MacBook / iMac'),
+    ('macos',   '💻 MacBook / iMac'),
     ('tv',      '📺 Телевизор'),
 ]
 
@@ -76,6 +78,14 @@ ANIMATED = True
 # id взяты из открытых наборов Telegram (Animated Emoji, Hand Emoji и
 # другие) через getStickerSet — их можно обновить тем же способом.
 EMOJI_IDS = {
+    '⚡️': '5431449001532594346',
+    '💎': '5471952986970267163',
+    '🔄': '5264727218734524899',
+    '📞': '5253596497454310931',
+    '✅': '5427009714745517609',
+    '📖': '5226512880362332956',
+    '⭐️': '5435957248314579621',
+    '💡': '5472146462362048818',
     '🎉': '5436040291507247633',
     '🎁': '5199749070830197566',
     '👇': '5470177992950946662',
@@ -88,7 +98,6 @@ EMOJI_IDS = {
     '📤': '5433614747381538714',
     '👥': '5372926953978341366',
     '📣': '5469903029144657419',
-    '🌐': '5359619818150436536',
     '➕': '5226945370684140473',
     '🛒': '5431499171045581032',
     '✍️': '5435884367014536083',
@@ -123,6 +132,50 @@ def animate(text):
 # длинные значки первыми: «⭐️» содержит «⭐», подменять надо целиком
 EMOJI_SORTED = sorted(EMOJI_IDS.items(), key=lambda kv: -len(kv[0]))
 
+# Кнопки умеют цвет и свой значок с Bot API 10.3 (август 2026).
+#   style — 'success' (зелёный), 'primary' (синий), 'danger' (красный);
+#           без него клиент рисует кнопку по-своему;
+#   icon_custom_emoji_id — значок перед подписью, тот же формат, что и
+#           анимированные эмодзи в тексте.
+#
+# Правило цвета: зелёная кнопка на экране одна — то самое действие,
+# ради которого экран показан. Синие — всё остальное. Красная только
+# у «Помощи»: это аварийный выход, он должен бросаться в глаза.
+# «Назад» без цвета, чтобы не спорить с главной кнопкой.
+#
+# Значок уезжает из подписи в отдельное поле — заодно освобождает
+# место в подписи, которую Telegram режет на узком экране.
+# Старый клиент, не знающий этих полей, покажет обычную кнопку.
+
+SUCCESS, PRIMARY, DANGER = 'success', 'primary', 'danger'
+BUTTON_ICONS = True
+
+
+def split_icon(text):
+    """Отделяет ведущий значок от подписи: «⚡️ Подключить» → id, «Подключить»."""
+    for e, eid in EMOJI_SORTED:
+        if text.startswith(e + ' '):
+            return eid, text[len(e) + 1:]
+    return None, text
+
+
+def label(text):
+    """Подпись так, как её увидит человек и пришлёт обратно с клавиатуры."""
+    return split_icon(text)[1] if BUTTON_ICONS else text
+
+
+def decorate(btn, style=None):
+    """Красит кнопку и переносит значок из подписи в icon_custom_emoji_id."""
+    if style:
+        btn['style'] = style
+    if BUTTON_ICONS:
+        eid, rest = split_icon(btn['text'])
+        if eid:
+            btn['icon_custom_emoji_id'] = eid
+            btn['text'] = rest
+    return btn
+
+
 # Эффекты на весь экран для пиковых моментов: включили бесплатные дни,
 # оплатили, подключились. Больше нигде — иначе это перестанет радовать.
 EFFECT_PARTY = '5046509860389126442'   # 🎉
@@ -133,8 +186,10 @@ EFFECT_HEART = '5159385139981059251'   # ❤️
 
 BACK = '◀️ Назад'
 HOME = '🏠 Кабинет'   # только на нижней клавиатуре
-CONNECT = '🔌 Подключить VPN'
-HELP = '🆘 Помощь'
+CONNECT = '⚡️ Подключить VPN'
+HELP = '📞 Помощь'
+BUY = '💎 Купить подписку'
+RENEW = '🔄 Продлить подписку'
 
 MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
           'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря']
@@ -232,8 +287,8 @@ def welcome_buttons(p):
     # Подключить — главное. Купить — видно сразу, не после пробных дней.
     # «Помощь» здесь не дублируем: она постоянно висит на нижней клавиатуре.
     return [
-        [{'text': '🔌 Подключить VPN', 'web_app': miniapp(None, p)}],
-        [{'text': '💳 Купить подписку', 'nav': 'tariffs'}],
+        [{'text': CONNECT, 'web_app': miniapp(None, p), 'style': SUCCESS}],
+        [{'text': BUY, 'nav': 'tariffs', 'style': PRIMARY}],
     ]
 
 
@@ -256,7 +311,7 @@ def activated_caption(p):
 
 def activated_buttons(p):
     if not p['connected']:
-        return [[{'text': CONNECT, 'web_app': miniapp(None, p)}]]
+        return [[{'text': CONNECT, 'web_app': miniapp(None, p), 'style': SUCCESS}]]
     return []
 
 
@@ -299,15 +354,16 @@ def cabinet_buttons(p):
     trial = p['kind'] == 'trial'
     if not p['connected']:
         # Не подключился — всё внимание на это. Звать друзей ещё рано.
-        return [[{'text': CONNECT, 'web_app': miniapp(None, p)}],
-                [{'text': '💳 Купить' if trial else '🛒 Продлить', 'nav': 'tariffs'},
-                 {'text': HELP, 'nav': 'help'}]]
-    rows = [[{'text': '💳 Купить подписку' if trial else '🛒 Продлить подписку',
-              'nav': 'tariffs'}]]
+        return [[{'text': CONNECT, 'web_app': miniapp(None, p), 'style': SUCCESS}],
+                [{'text': '💎 Купить' if trial else '🔄 Продлить', 'nav': 'tariffs',
+                  'style': PRIMARY},
+                 {'text': HELP, 'nav': 'help', 'style': DANGER}]]
+    rows = [[{'text': BUY if trial else RENEW, 'nav': 'tariffs', 'style': SUCCESS}]]
     if not trial:
         # бесплатные дни — одно устройство; второе только по тарифу
-        rows.append([{'text': '➕ Ещё устройство', 'web_app': miniapp(None, p)}])
-    rows.append([{'text': '🎁 Пригласить', 'nav': 'referral'}, {'text': HELP, 'nav': 'help'}])
+        rows.append([{'text': '➕ Ещё устройство', 'web_app': miniapp(None, p), 'style': PRIMARY}])
+    rows.append([{'text': '🎁 Пригласить', 'nav': 'referral', 'style': PRIMARY},
+                 {'text': HELP, 'nav': 'help', 'style': DANGER}])
     return rows
 
 
@@ -324,10 +380,9 @@ def expiring_caption(p):
 
 
 def expiring_buttons(p):
-    rows = [[{'text': '💳 Купить подписку' if p['kind'] == 'trial' else '🛒 Продлить подписку',
-              'nav': 'tariffs'}]]
+    rows = [[{'text': BUY if p['kind'] == 'trial' else RENEW, 'nav': 'tariffs', 'style': SUCCESS}]]
     if not p['connected']:
-        rows.append([{'text': CONNECT, 'web_app': miniapp(None, p)}])
+        rows.append([{'text': CONNECT, 'web_app': miniapp(None, p), 'style': PRIMARY}])
     return rows
 
 
@@ -346,8 +401,7 @@ def expired_caption(p):
 
 
 def expired_buttons(p):
-    return [[{'text': '💳 Купить подписку' if p['kind'] == 'trial' else '🛒 Продлить подписку',
-              'nav': 'tariffs'}]]
+    return [[{'text': BUY if p['kind'] == 'trial' else RENEW, 'nav': 'tariffs', 'style': SUCCESS}]]
 
 
 # ── Тарифы и оплата ────────────────────────────────────────────────
@@ -362,8 +416,10 @@ def tariffs_caption(p):
 
 
 def tariffs_buttons(p):
-    return [[{'text': '%s — %s' % (t['title'], t['price']), 'act': 'buy:' + t['id']}]
-            for t in TARIFFS]
+    # Три равных выбора — три одинаковые кнопки: зелёная будет на следующем
+    # экране, на самой оплате.
+    return [[{'text': '⭐️ %s — %s' % (t['title'], t['price']), 'act': 'buy:' + t['id'],
+              'style': PRIMARY}] for t in TARIFFS]
 
 
 def pay_screen(t):
@@ -381,7 +437,8 @@ def pay_screen(t):
         'banner': 'tariffs-banner.jpg', 'back': 'tariffs',
         'caption': caption,
         # TODO: в бою — sendInvoice. Пока кнопка помечена как демо.
-        'buttons': lambda p: [[{'text': '💳 Оплатить %s (демо)' % t['price'], 'act': 'pay:' + t['id']}]],
+        'buttons': lambda p: [[{'text': '💎 Оплатить %s (демо)' % t['price'],
+                                'act': 'pay:' + t['id'], 'style': SUCCESS}]],
     }
 
 
@@ -395,7 +452,8 @@ def howto_caption(p):
 
 
 def howto_buttons(p):
-    return [[{'text': title, 'web_app': miniapp(pid, p)}] for pid, title in PLATFORMS]
+    return [[{'text': title, 'web_app': miniapp(pid, p), 'style': PRIMARY}]
+            for pid, title in PLATFORMS]
 
 
 # ── Пригласить друга ───────────────────────────────────────────────
@@ -416,7 +474,7 @@ def referral_buttons(p):
                 'Han%20VPN%20%E2%80%94%20%D0%B1%D0%B5%D0%B7%D0%BB%D0%B8%D0%BC%D0%B8%D1%82'
                 '%2C%203%20%D0%B4%D0%BD%D1%8F%20%D0%B1%D0%B5%D1%81%D0%BF%D0%BB%D0%B0%D1%82%D0%BD%D0%BE'))
     # «Мои приглашения» здесь была лишней: те же два числа уже в тексте выше.
-    return [[{'text': '📤 Отправить другу', 'url': share}]]
+    return [[{'text': '📤 Отправить другу', 'url': share, 'style': SUCCESS}]]
 
 
 # ── Помощь: один экран, и писать можно прямо сюда ──────────────────
@@ -437,9 +495,10 @@ def help_buttons(p):
     # «Новости» ведут в канал напрямую, документы — ссылкой в тексте:
     # экран ради одной ссылки — лишнее нажатие.
     return [
-        [{'text': '🔌 Показать подключение', 'web_app': miniapp(None, p)}],
-        [{'text': '📘 Настройка', 'nav': 'howto'}, {'text': '📣 Новости', 'url': CHANNEL_URL}],
-        [{'text': '✍️ Написать нам', 'url': SUPPORT_URL}],
+        [{'text': '⚡️ Показать подключение', 'web_app': miniapp(None, p), 'style': SUCCESS}],
+        [{'text': '📖 Настройка', 'nav': 'howto', 'style': PRIMARY},
+         {'text': '📣 Новости', 'url': CHANNEL_URL, 'style': PRIMARY}],
+        [{'text': '✍️ Написать нам', 'url': SUPPORT_URL, 'style': PRIMARY}],
     ]
 
 
@@ -461,7 +520,8 @@ SCREENS = {
                                     '<blockquote>Проверить просто: нажмите «Проверить» — открылся сайт, '
                                     'значит работает. Не открылся — «Помощь» внизу.</blockquote>'
                                     + ('\n%s' % period_line(p) if p['until'] else '')),
-              'buttons': lambda p: [[{'text': '🌐 Проверить VPN', 'url': CHECK_URL}]]},
+              'buttons': lambda p: [[{'text': '✅ Проверить VPN', 'url': CHECK_URL,
+                                      'style': SUCCESS}]]},
     'tariffs':  {'banner': 'tariffs-banner.jpg', 'back': 'home',
                  'caption': tariffs_caption, 'buttons': tariffs_buttons},
     'howto':    {'banner': 'howto-banner.jpg', 'back': 'home',
@@ -480,15 +540,15 @@ ROOTS = ('welcome', 'cabinet', 'expiring', 'expired')
 # карточка на экране, — «Помощь» в одно нажатие откуда угодно.
 # «Подключить VPN» здесь — KeyboardButton с web_app: только так мини-аппа
 # сможет ответить боту через sendData (из инлайн-кнопок это не работает).
-KB_CONNECT, KB_HOME, KB_HELP = '🔌 Подключить VPN', '🏠 Кабинет', '🆘 Помощь'
-KEYBOARD_VERSION = 2
+KB_CONNECT, KB_HOME, KB_HELP = CONNECT, HOME, HELP
+KEYBOARD_VERSION = 3       # цвет и значки — клавиатуру нужно переслать
 
 
 def reply_keyboard():
     return {
         'keyboard': [
-            [{'text': KB_CONNECT, 'web_app': {'url': miniapp() + '?src=kb'}}],
-            [{'text': KB_HOME}, {'text': KB_HELP}],
+            [decorate({'text': KB_CONNECT, 'web_app': {'url': miniapp() + '?src=kb'}}, SUCCESS)],
+            [decorate({'text': KB_HOME}, PRIMARY), decorate({'text': KB_HELP}, DANGER)],
         ],
         'resize_keyboard': True,
         'is_persistent': True,
