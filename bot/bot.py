@@ -210,7 +210,12 @@ def load_profile(user):
         p['sub_last_opened_at'] = found['sub_last_opened_at']
         p['online_at'] = found['online_at']
         p['subscription_url'] = found['subscription_url']
-        p['connected'] = p['connected'] or bool(found['sub_last_opened_at'])
+        # Признак подключения у разных версий панели разный — спрашиваем
+        # клиент, он знает, куда смотреть в этой.
+        try:
+            p['connected'] = p['connected'] or rw.is_connected(cfg, found)
+        except rw.RemnawaveError:
+            pass
 
     if p['until']:
         p['left'] = p['until'] - now
@@ -397,10 +402,10 @@ def act_pay(token, cq, plan_id):
     try:
         cfg = rw.load_config()
         found = rw.find_user(cfg, user['id'])
-        if found and found['uuid']:
-            rw._request(cfg, 'PATCH', '/api/users', {'uuid': found['uuid'], 'expireAt': until.isoformat()})
-    except (rw.NotConfigured, rw.RemnawaveError):
-        pass
+        if found and found['ref'] is not None:
+            rw.set_expiry(cfg, found, until)
+    except (rw.NotConfigured, rw.RemnawaveError) as e:
+        print('  ! Remnawave при оплате: %r' % e)
     answer(token, cq, 'Оплачено (демо). Работает до %s.' % S.human_date(until))
     send_screen(token, msg['chat']['id'], 'activated', user,
                 replace_card=True, effect=S.EFFECT_PARTY)
@@ -469,9 +474,9 @@ def confirm_by_panel(user, tries=4, pause=2.0):
         except rw.RemnawaveError as e:
             print('  ! Remnawave при проверке подключения: %s' % e)
             return True          # панель молчит — не наказываем человека
-        if found and found['sub_last_opened_at']:
-            print('    панель подтвердила: конфиг забран (%s)'
-                  % (found['sub_last_user_agent'] or 'клиент неизвестен'))
+        if found and rw.is_connected(cfg, found):
+            print('    панель подтвердила подключение (%s)'
+                  % (found.get('sub_last_user_agent') or 'по трафику или устройству'))
             return True
         if i + 1 < tries:
             time.sleep(pause)

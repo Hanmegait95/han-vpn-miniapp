@@ -72,15 +72,18 @@ def _request(cfg, method, path, body=None):
             'Accept': 'application/json',
         },
     )
+    def body_of(raw, code):
+        # Панель на неизвестный путь отдаёт HTML своей веб-морды —
+        # разбирать его как JSON нельзя, иначе клиент падает на ровном месте.
+        try:
+            return code, json.loads(raw)
+        except ValueError:
+            return code, {}
     try:
         with urllib.request.urlopen(req, timeout=25) as res:
-            return res.status, json.load(res)
+            return body_of(res.read(), res.status)
     except urllib.error.HTTPError as e:
-        raw = e.read()
-        try:
-            return e.code, json.loads(raw)
-        except ValueError:
-            return e.code, {}
+        return body_of(e.read(), e.code)
     except urllib.error.URLError as e:
         raise RemnawaveError('панель недоступна: %s' % e.reason)
 
@@ -99,17 +102,27 @@ def parse_user(payload):
         except ValueError:
             return None
 
+    # Версии панели расходятся: в одних пользователь адресуется uuid
+    # и отдаёт subLastOpenedAt, в других — числовым id, а признаки
+    # подключения лежат внутри userTraffic. Поддерживаем обе.
+    tr = data.get('userTraffic') or {}
     return {
+        'id': data.get('id'),
         'uuid': data.get('uuid'),
+        'ref': data.get('id') if data.get('id') is not None else data.get('uuid'),
+        'short_uuid': data.get('shortUuid'),
         'username': data.get('username'),
         'status': data.get('status'),
         'subscription_url': data.get('subscriptionUrl'),
         'expire_at': dt(data.get('expireAt')),
         'device_limit': data.get('hwidDeviceLimit'),
-        # на этих двух держится мастер подключения в мини-аппе
+        # «подписку забрали» — есть не везде
         'sub_last_opened_at': dt(data.get('subLastOpenedAt')),
         'sub_last_user_agent': data.get('subLastUserAgent'),
-        'online_at': dt(data.get('onlineAt')),
+        # «человек подключился» — надёжнее, потому что означает живой VPN
+        'online_at': dt(data.get('onlineAt') or tr.get('onlineAt')),
+        'first_connected_at': dt(tr.get('firstConnectedAt')),
+        'used_traffic': tr.get('usedTrafficBytes') or 0,
     }
 
 
@@ -158,6 +171,48 @@ def create_trial(cfg, telegram_id, days=None, device_limit=None):
     return parse_user(payload), True
 
 
+def devices(cfg, user):
+    """Сколько устройств зарегистрировано за пользователем."""
+    if user.get('id') is None:
+        return 0
+    status, body = _request(cfg, 'GET', '/api/hwid/devices/%s' % user['id'])
+    if status >= 400:
+        return 0
+    return ((body.get('response') or body) or {}).get('total') or 0
+
+
+def is_connected(cfg, user):
+    """
+    Подключился ли человек на самом деле. В разных версиях панели
+    признак разный, поэтому смотрим все и берём любой сработавший:
+
+      · subLastOpenedAt — приложение забрало конфиг по ссылке подписки;
+      · firstConnectedAt / onlineAt — было живое соединение;
+      · зарегистрированное устройство или израсходованный трафик.
+    """
+    if user.get('sub_last_opened_at') or user.get('first_connected_at') \
+            or user.get('online_at') or (user.get('used_traffic') or 0) > 0:
+        return True
+    return devices(cfg, user) > 0
+
+
+def set_expiry(cfg, user, until):
+    """Продление. Пользователь адресуется тем, что отдала панель."""
+    body = {'expireAt': until.isoformat()}
+    body['id' if user.get('id') is not None else 'uuid'] = user['ref']
+    status, payload = _request(cfg, 'PATCH', '/api/users', body)
+    if status >= 400:
+        raise RemnawaveError('продление: HTTP %s %s' % (status, payload.get('message', '')))
+    return parse_user(payload)
+
+
+def delete_user(cfg, user):
+    status, _ = _request(cfg, 'DELETE', '/api/users/%s' % user['ref'])
+    if status >= 400:
+        raise RemnawaveError('удаление: HTTP %s' % status)
+    return True
+
+
 def ping(cfg):
     """Проверка доступа: панель отвечает и токен принят."""
     status, _ = _request(cfg, 'GET', '/api/users?size=1&start=0')
@@ -191,13 +246,16 @@ def selfcheck(cfg):
 
     # Мастер подключения в мини-аппе держится на двух полях. Если панель
     # их не отдаёт, «Подключено» никогда не наступит — лучше узнать сразу.
-    NEEDED = ('subscriptionUrl', 'expireAt', 'hwidDeviceLimit',
-              'subLastOpenedAt', 'subLastUserAgent', 'onlineAt')
     if users:
         have = set(users[0].keys())
-        missing = [f for f in NEEDED if f not in have]
-        print('поля пользователя: %s' % ('все на месте' if not missing
-                                         else 'НЕ ХВАТАЕТ ' + ', '.join(missing)))
+        tr = set((users[0].get('userTraffic') or {}).keys())
+        need = [f for f in ('subscriptionUrl', 'expireAt', 'hwidDeviceLimit') if f not in have]
+        print('поля пользователя: %s' % ('основные на месте' if not need
+                                         else 'НЕ ХВАТАЕТ ' + ', '.join(need)))
+        signal = [n for n in ('subLastOpenedAt',) if n in have] + \
+                 [n for n in ('firstConnectedAt', 'onlineAt') if n in tr]
+        print('признак подключения: %s' % (', '.join(signal) if signal
+                                           else 'только регистрация устройств (hwid)'))
     else:
         print('поля пользователя: в панели пока нет ни одного — проверим после '
               'первой выдачи триала')
