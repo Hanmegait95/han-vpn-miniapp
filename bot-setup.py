@@ -28,7 +28,7 @@ import urllib.error
 import urllib.request
 
 TOKEN_FILE = os.path.expanduser('~/.config/hanvpn/bot_token')
-MINIAPP_URL = 'https://hanproject.ru/vpnminiapp/'
+MINIAPP_URL = 'https://hanproject.ru/vpn/'
 BUTTON_TEXT = 'Подключить VPN'
 
 COMMANDS = [

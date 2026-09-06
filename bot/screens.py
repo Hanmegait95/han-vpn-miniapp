@@ -30,7 +30,7 @@ from urllib.parse import quote
 HOUR = timedelta(hours=1)
 TRIAL_DAYS = 3
 
-MINIAPP_URL = 'https://hanproject.ru/vpnminiapp/'
+MINIAPP_URL = 'https://hanproject.ru/vpn/'
 # Заглушки. Бот проверяет их при запуске и ругается — см. check_links().
 CHANNEL_URL = 'https://t.me/hanvpn'          # TODO: настоящий канал
 SUPPORT_URL = 'https://t.me/hanvpn_support'  # TODO: аккаунта с таким именем нет
@@ -560,7 +560,7 @@ ROOTS = ('welcome', 'cabinet', 'expiring', 'expired')
 # «Подключить VPN» здесь — KeyboardButton с web_app: только так мини-аппа
 # сможет ответить боту через sendData (из инлайн-кнопок это не работает).
 KB_CONNECT, KB_HOME, KB_HELP = CONNECT, HOME, HELP
-KEYBOARD_VERSION = 3       # цвет и значки — клавиатуру нужно переслать
+KEYBOARD_VERSION = 4       # адрес мини-аппы сменился — клавиатуру нужно переслать
 
 
 def reply_keyboard():
