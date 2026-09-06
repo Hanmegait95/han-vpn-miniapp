@@ -30,10 +30,19 @@ HOUR = timedelta(hours=1)
 TRIAL_DAYS = 3
 
 MINIAPP_URL = 'https://hanproject.ru/vpnminiapp/'
+# Заглушки. Бот проверяет их при запуске и ругается — см. check_links().
 CHANNEL_URL = 'https://t.me/hanvpn'          # TODO: настоящий канал
-SUPPORT_URL = 'https://t.me/hanvpn_support'  # TODO: настоящая поддержка
+SUPPORT_URL = 'https://t.me/hanvpn_support'  # TODO: аккаунта с таким именем нет
 CHECK_URL = 'https://www.instagram.com/'      # TODO: сайт, который без VPN не открывается
-TERMS_URL = 'https://hanproject.ru/terms'    # TODO: документы
+TERMS_URL = 'https://hanproject.ru/terms'    # TODO: страницы нет, отдаёт 404
+
+# Что обязательно заменить перед запуском: пока здесь заглушки, кнопки
+# ведут в пустоту, а человек этого не прощает.
+PLACEHOLDERS = {
+    'SUPPORT_URL (кнопка «Написать нам»)': SUPPORT_URL,
+    'CHANNEL_URL (кнопка «Новости»)': CHANNEL_URL,
+    'TERMS_URL (документы)': TERMS_URL,
+}
 
 # TODO: цены. На баннере «актуальные цены в боте» — значит правда живёт здесь.
 TARIFFS = [
@@ -486,8 +495,10 @@ def help_caption(p):
             '<blockquote>Ваш номер для обращения: <code>%s</code>\n'
             'Нажмите на него — скопируется.</blockquote>\n'
             'Перестало работать сразу у всех — смотрите «Новости»: '
-            'там пишем, что случилось и когда починим. '
-            '<a href="%s">Условия и документы</a>.') % (p['telegram_id'], TERMS_URL)
+            'там пишем, что случилось и когда починим.'
+            # TODO: вернуть ссылку на документы, когда появится страница:
+            # ' <a href="%s">Условия и документы</a>.' % TERMS_URL
+            ) % p['telegram_id']
 
 
 def help_buttons(p):

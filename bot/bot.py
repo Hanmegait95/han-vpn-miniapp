@@ -444,20 +444,32 @@ def on_callback(token, cq):
 
 
 def on_web_app_data(token, msg):
-    """Мини-аппа рассказала, чем кончилось подключение."""
+    """
+    Мини-аппа рассказала, чем кончилось подключение.
+
+    sendData закрывает окно мини-аппы, поэтому промолчать нельзя ни при
+    каких данных: человек уже смотрит в чат и ждёт ответа. Каждая ветка,
+    включая непонятное сообщение, заканчивается экраном.
+    """
+    user, chat_id = msg['from'], msg['chat']['id']
     try:
         data = json.loads(msg['web_app_data']['data'])
-    except (KeyError, ValueError):
+        if not isinstance(data, dict):
+            raise ValueError('ожидали объект')
+    except (KeyError, ValueError) as e:
+        print('  мини-аппа: сообщение не разобрано (%r)' % e)
+        show_home(token, chat_id, user)
         return
-    user, chat_id = msg['from'], msg['chat']['id']
     ev = data.get('event')
-    print('  мини-аппа: %s от %s' % (ev, user.get('username') or user['id']))
+    print('  мини-аппа: %s от %s' % (ev or '(без события)', user.get('username') or user['id']))
+    changed = False
     # Бесплатные дни включили прямо в мини-аппе — записываем, если ещё не было
     if (data.get('trial') or ev == 'trial') and load_profile(user)['kind'] == 'new':
         now = datetime.now(timezone.utc)
         store.update(user['id'], trial_at=now.isoformat(),
                      trial_until=(now + timedelta(days=S.TRIAL_DAYS)).isoformat())
         print('    бесплатные дни включены из мини-аппы')
+        changed = True
     # Оплатили в мини-аппе (демо) — продление прибавляется к остатку
     plan_id = data.get('plan') or data.get('paid')
     t = S.tariff(plan_id) if plan_id else None
@@ -467,11 +479,7 @@ def on_web_app_data(token, msg):
         store.update(user['id'], paid_until=(base + timedelta(days=t['days'])).isoformat(),
                      plan=t['id'], paid_at=p['now'].isoformat())
         print('    оплата из мини-аппы: %s' % t['id'])
-    if ev in ('trial', 'paid'):
-        # Окно закрылось сразу после активации: показываем «включено, один шаг»
-        send_screen(token, chat_id, 'activated', user,
-                    replace_card=True, effect=S.EFFECT_PARTY)
-        return
+        changed = True
     if ev == 'connected':
         store.update(user['id'], connected=True)
         send_screen(token, chat_id, 'ready', user, replace_card=True, effect=S.EFFECT_FIRE)
@@ -480,6 +488,13 @@ def on_web_app_data(token, msg):
         call(token, 'sendMessage', {'chat_id': chat_id, 'parse_mode': 'HTML',
              'text': S.animate('Вижу, что подключить не получилось. Вот что можно сделать 👇')})
         send_screen(token, chat_id, 'help', user)
+    elif ev in ('trial', 'paid') or changed:
+        # Окно закрылось сразу после активации: показываем «включено, один шаг»
+        send_screen(token, chat_id, 'activated', user,
+                    replace_card=True, effect=S.EFFECT_PARTY)
+    else:
+        # Событие незнакомое или его нет вовсе — всё равно отвечаем.
+        show_home(token, chat_id, user)
 
 
 def stats_text():
@@ -516,9 +531,23 @@ def stats_text():
                connected, pct(connected, n), expiring, today, referred))
 
 
+def react(token, msg, emoji='👀'):
+    """Анимированная отметка «прочитано» — человек видит, что его услышали."""
+    call(token, 'setMessageReaction',
+         {'chat_id': msg['chat']['id'], 'message_id': msg['message_id'],
+          'reaction': [{'type': 'emoji', 'emoji': emoji}]}, quiet=True)
+
+
 def on_message(token, msg):
     if 'web_app_data' in msg:
         on_web_app_data(token, msg); return True
+
+    # Прислали скриншот, голосовое или файл. Почти всегда это «смотрите,
+    # у меня не получается». Молчать здесь нельзя.
+    if 'text' not in msg:
+        react(token, msg)
+        send_screen(token, msg['chat']['id'], 'help', msg['from'])
+        return True
 
     text = msg.get('text') or ''
     parts = text.split()
@@ -597,9 +626,7 @@ def on_message(token, msg):
     # Молчание выглядит как поломка. На любой текст отвечаем экраном,
     # а по приметам — сразу нужным разделом. Поддержка — отдельный бот.
     # Сначала — анимированная реакция: человек сразу видит, что его прочли.
-    call(token, 'setMessageReaction',
-         {'chat_id': msg['chat']['id'], 'message_id': msg['message_id'],
-          'reaction': [{'type': 'emoji', 'emoji': '👀'}]}, quiet=True)
+    react(token, msg)
     low = text.lower()
     if any(w in low for w in ('оплат', 'продл', 'куп', 'тариф', 'цен', 'стои', 'скольк')):
         target = 'tariffs'
@@ -614,6 +641,13 @@ def on_message(token, msg):
     return True
 
 
+# Что от человека бот разбирает. Всё остальное (служебные сообщения,
+# опросы, геометки) молча пропускаем.
+MEDIA = ('photo', 'document', 'video', 'voice', 'video_note', 'sticker',
+         'audio', 'animation')
+HANDLED = ('text', 'web_app_data') + MEDIA
+
+
 def handle(token, update):
     if 'callback_query' in update:
         cq = update['callback_query']
@@ -623,12 +657,18 @@ def handle(token, update):
         return
 
     msg = update.get('message')
-    if not msg or 'text' not in msg:
+    if not msg or 'from' not in msg:
+        return
+    # Берём только то, что человек прислал сам. Служебные сообщения —
+    # в том числе «закреплено», которое бот порождает сам, — пропускаем:
+    # иначе закрепление карточки вызовет отправку новой, и так по кругу.
+    if not any(k in msg for k in HANDLED):
         return
     who = msg['from'].get('username') or msg['from'].get('first_name') or msg['from']['id']
     done = on_message(token, msg)
-    print('  %s от %s → %s' % (msg['text'].split()[0], who,
-                               'экран отправлен' if done else 'обработчика нет'))
+    what = (msg['text'].split() or ['(пусто)'])[0] if 'text' in msg else \
+           ('мини-аппа' if 'web_app_data' in msg else 'вложение')
+    print('  %s от %s → %s' % (what, who, 'экран отправлен' if done else 'обработчика нет'))
 
 
 # ── Бот пишет первым ───────────────────────────────────────────────
@@ -727,6 +767,31 @@ def notifier(token):
             print('  ! обход уведомлений: %r' % e)
 
 
+def check_links():
+    """
+    Кнопка, ведущая в пустоту, — худшее, что можно показать новичку.
+    Проверяем заглушки на запуске и говорим вслух: молча уехать в бой
+    с несуществующим аккаунтом поддержки нельзя.
+    """
+    import urllib.request
+    bad = []
+    for name, url in S.PLACEHOLDERS.items():
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            body = urllib.request.urlopen(req, timeout=10).read().decode('utf-8', 'ignore')
+            # t.me отдаёт 200 и на свободное имя: настоящий профиль виден
+            # по блоку tgme_page_title, у пустого его нет.
+            if 't.me/' in url and 'tgme_page_title' not in body:
+                bad.append('%s — такого аккаунта в Telegram нет: %s' % (name, url))
+        except Exception as e:
+            bad.append('%s — не открывается (%s): %s' % (name, type(e).__name__, url))
+    if bad:
+        print('  ВНИМАНИЕ, кнопки ведут в пустоту:')
+        for b in bad:
+            print('    ! ' + b)
+        print('    заменить в screens.py до запуска на людях')
+
+
 def main():
     global BOT_USERNAME
     token = read_token()
@@ -746,6 +811,7 @@ def main():
 
     print('бот @%s слушает, экранов: %d. Ctrl+C — остановить'
           % (BOT_USERNAME, len(S.SCREENS)))
+    check_links()
 
 
     threading.Thread(target=notifier, args=(token,), daemon=True).start()
