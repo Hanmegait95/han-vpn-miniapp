@@ -59,8 +59,9 @@ DATA_LAYER = """  /* ── Бэкенд ─────────────
     { id: 'm3', title: '3 месяца', price: '449 ₽',  days: 90 },
     { id: 'y1', title: 'Год',      price: '1490 ₽', days: 365 },
   ];
-  let SUB_LINK = '';               // приходит с бэка вместе со статусом
-  const DEMO_NOTE = '';            // предупреждение о заглушке — только в прототипе
+  let SUB_LINK = Q.get('sub') || '';   // от бота; статус с бэка перезапишет
+  const DEMO_NOTE = '';                // предупреждение о заглушке — только в прототипе
+  const SUB_FROM_BOT = SUB_LINK;
   const CHECK_URL = 'https://www.instagram.com/';                          // TODO: сайт, который без VPN не открывается
   const TRIAL_DEVICES = 1;
   const sub = { kind: 'new', until: null, fetchedAt: null };

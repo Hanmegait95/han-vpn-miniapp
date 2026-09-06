@@ -177,6 +177,9 @@ def load_profile(user):
         'kind': 'new', 'phase': None, 'until': None, 'left': None,
         'connected': bool(rec.get('connected')),
         'sub_last_opened_at': None, 'online_at': None,
+        # Ссылка подписки живёт только в панели. Пока панели нет — None,
+        # и мини-аппа честно скажет, что подключать нечего.
+        'subscription_url': None,
         'plan': S.tariff(rec.get('plan')) if rec.get('plan') else None,
         'referrer_name': (store.get(rec['referrer']).get('name') if rec.get('referrer') else None),
         'invited': len(rec.get('invited') or []),
@@ -206,6 +209,7 @@ def load_profile(user):
                 p['kind'] = 'trial'
         p['sub_last_opened_at'] = found['sub_last_opened_at']
         p['online_at'] = found['online_at']
+        p['subscription_url'] = found['subscription_url']
         p['connected'] = p['connected'] or bool(found['sub_last_opened_at'])
 
     if p['until']:
@@ -443,6 +447,38 @@ def on_callback(token, cq):
     answer(token, cq, ACTIONS.get(key, 'Этот раздел ещё в работе.'), alert=True)
 
 
+def confirm_by_panel(user, tries=4, pause=2.0):
+    """
+    Забрало ли приложение конфиг. Панель отмечает обращение к ссылке
+    подписки полем subLastOpenedAt — это единственный честный признак.
+    Приложению нужно несколько секунд, поэтому спрашиваем не один раз.
+
+    Панель не настроена — возвращаем True: прототип без неё работает
+    на доверии к мини-аппе, как и раньше.
+
+    Бот разбирает обновления по одному, поэтому ожидание короткое: восемь
+    секунд на человека терпимо, полминуты — уже очередь для остальных.
+    """
+    try:
+        cfg = rw.load_config()
+    except rw.NotConfigured:
+        return True
+    for i in range(tries):
+        try:
+            found = rw.find_user(cfg, user['id'])
+        except rw.RemnawaveError as e:
+            print('  ! Remnawave при проверке подключения: %s' % e)
+            return True          # панель молчит — не наказываем человека
+        if found and found['sub_last_opened_at']:
+            print('    панель подтвердила: конфиг забран (%s)'
+                  % (found['sub_last_user_agent'] or 'клиент неизвестен'))
+            return True
+        if i + 1 < tries:
+            time.sleep(pause)
+    print('    панель не видит обращения к ссылке подписки')
+    return False
+
+
 def on_web_app_data(token, msg):
     """
     Мини-аппа рассказала, чем кончилось подключение.
@@ -481,6 +517,16 @@ def on_web_app_data(token, msg):
         print('    оплата из мини-аппы: %s' % t['id'])
         changed = True
     if ev == 'connected':
+        # Мини-аппа не может знать, забрало ли приложение конфиг: она видит
+        # только, что открыла ссылку. Правду знает панель — спрашиваем её,
+        # прежде чем поздравлять. Без панели верим на слово, как раньше.
+        if not confirm_by_panel(user):
+            call(token, 'sendMessage', {'chat_id': chat_id, 'parse_mode': 'HTML',
+                 'text': S.animate('Пока не вижу, что приложение забрало подписку. '
+                                   'Откройте его и подтвердите добавление — я замечу сам. '
+                                   'Не выходит — нажмите «Помощь» внизу 👇')})
+            send_screen(token, chat_id, 'help', user)
+            return
         store.update(user['id'], connected=True)
         send_screen(token, chat_id, 'ready', user, replace_card=True, effect=S.EFFECT_FIRE)
     elif ev == 'failed':

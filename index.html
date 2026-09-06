@@ -444,7 +444,12 @@
   ];
   const TRIAL_DEVICES = 1;       // бесплатные дни — на одно устройство
   const CHECK_URL = 'https://www.instagram.com/';   // TODO: сайт, который без VPN не открывается
-  const SUB_LINK = 'https://sub.hanvpn.app/user_' + (TG_USER ? TG_USER.id : '000000000');
+  /* Ссылка подписки приходит от бота (?sub=…): ключ от панели наружу
+     не отдают, поэтому взять её сама мини-аппа не может. Не передали —
+     работаем на заглушке и честно предупреждаем, что VPN не заработает. */
+  const SUB_FROM_BOT = Q.get('sub') || '';
+  const SUB_LINK = SUB_FROM_BOT ||
+    ('https://sub.hanvpn.app/user_' + (TG_USER ? TG_USER.id : '000000000'));
 
   /* Пока ссылка подписки — заглушка, приложению нечего забирать: домена
      sub.hanvpn.app не существует. Молчать об этом нельзя, иначе человек
@@ -714,7 +719,11 @@
       text: () => 'Подтвердите добавление в приложении — мы увидим это сами.',
       cta: () => 'Проверяем',
       run: () => {},
-      alts: () => [{ label: 'ничего не открылось', run: () => go('retry') }],
+      alts: () => [
+        CAN_TELL && SUB_FROM_BOT
+          ? { label: 'я добавил — пусть бот проверит', run: () => tellBot({ event: 'connected' }) } : null,
+        { label: 'ничего не открылось', run: () => go('retry') },
+      ],
     },
     retry: {
       step: 1, back: 'connect',
@@ -734,6 +743,8 @@
         ];
       },
       alts: () => [
+        CAN_TELL && SUB_FROM_BOT
+          ? { label: 'я добавил — пусть бот проверит', run: () => tellBot({ event: 'connected' }) } : null,
         { label: 'попробовать ещё раз', run: tryConnect },
         CAN_TELL ? { label: 'не получается — позвать помощь', run: () => tellBot({ event: 'failed' }) } : null,
       ],

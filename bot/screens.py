@@ -25,6 +25,7 @@
 """
 
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 HOUR = timedelta(hours=1)
 TRIAL_DAYS = 3
@@ -269,6 +270,13 @@ def miniapp(platform=None, p=None):
         q.append('kind=' + p['kind'])
         if p.get('until'):
             q.append('until=' + p['until'].strftime('%Y-%m-%d'))
+        # Ссылка подписки — то единственное, ради чего мини-аппа открывается.
+        # Взять её сама она не может: ключ от панели наружу отдавать нельзя.
+        # ВНИМАНИЕ: адрес попадает в журнал веб-сервера. Ссылку в Remnawave
+        # можно перевыпустить; правильное решение — отдавать её своим
+        # эндпоинтом по initData, см. INTEGRATION.md.
+        if p.get('subscription_url'):
+            q.append('sub=' + quote(p['subscription_url'], safe=''))
     return MINIAPP_URL + ('?' + '&'.join(q) if q else '')
 
 

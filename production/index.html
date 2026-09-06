@@ -437,8 +437,9 @@
     { id: 'm3', title: '3 месяца', price: '449 ₽',  days: 90 },
     { id: 'y1', title: 'Год',      price: '1490 ₽', days: 365 },
   ];
-  let SUB_LINK = '';               // приходит с бэка вместе со статусом
-  const DEMO_NOTE = '';            // предупреждение о заглушке — только в прототипе
+  let SUB_LINK = Q.get('sub') || '';   // от бота; статус с бэка перезапишет
+  const DEMO_NOTE = '';                // предупреждение о заглушке — только в прототипе
+  const SUB_FROM_BOT = SUB_LINK;
   const CHECK_URL = 'https://www.instagram.com/';                          // TODO: сайт, который без VPN не открывается
   const TRIAL_DEVICES = 1;
   const sub = { kind: 'new', until: null, fetchedAt: null };
@@ -672,7 +673,11 @@
       text: () => 'Подтвердите добавление в приложении — мы увидим это сами.',
       cta: () => 'Проверяем',
       run: () => {},
-      alts: () => [{ label: 'ничего не открылось', run: () => go('retry') }],
+      alts: () => [
+        CAN_TELL && SUB_FROM_BOT
+          ? { label: 'я добавил — пусть бот проверит', run: () => tellBot({ event: 'connected' }) } : null,
+        { label: 'ничего не открылось', run: () => go('retry') },
+      ],
     },
     retry: {
       step: 1, back: 'connect',
@@ -692,6 +697,8 @@
         ];
       },
       alts: () => [
+        CAN_TELL && SUB_FROM_BOT
+          ? { label: 'я добавил — пусть бот проверит', run: () => tellBot({ event: 'connected' }) } : null,
         { label: 'попробовать ещё раз', run: tryConnect },
         CAN_TELL ? { label: 'не получается — позвать помощь', run: () => tellBot({ event: 'failed' }) } : null,
       ],
