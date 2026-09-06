@@ -245,10 +245,14 @@ def keyboard(screen, profile):
     return {'inline_keyboard': rows}
 
 
-def send_screen(token, chat_id, name, user, replace_card=False):
+def send_screen(token, chat_id, name, user, replace_card=False, effect=None):
     """
     Отправка новым сообщением. replace_card убирает предыдущую карточку:
     иначе в чате копятся «живые» кабинеты, и человек жмёт кнопки на старом.
+
+    effect — анимация на весь экран (S.EFFECT_*). Telegram показывает её
+    только на новом сообщении в личном чате: при правке старого эффекта
+    не будет, поэтому пиковые моменты карточку пересылают, а не правят.
     """
     if replace_card:
         old = store.get(user['id']).get('card_message_id')
@@ -257,21 +261,24 @@ def send_screen(token, chat_id, name, user, replace_card=False):
                  {'chat_id': chat_id, 'message_id': old}, quiet=True)
     screen = S.SCREENS[name]
     profile = load_profile(user)
-    caption = screen['caption'](profile)
+    caption = S.animate(screen['caption'](profile))
     markup = keyboard(screen, profile)
     banner = banner_of(screen, profile)
 
     fid = _cache().get(banner)
     res = None
     if fid:
-        res = call(token, 'sendPhoto', {
-            'chat_id': chat_id, 'photo': fid, 'caption': caption,
-            'parse_mode': 'HTML', 'reply_markup': markup}, quiet=True)
+        payload = {'chat_id': chat_id, 'photo': fid, 'caption': caption,
+                   'parse_mode': 'HTML', 'reply_markup': markup}
+        if effect:
+            payload['message_effect_id'] = effect
+        res = call(token, 'sendPhoto', payload, quiet=True)
     if res is None:
-        res = upload(token, 'sendPhoto', {
-            'chat_id': str(chat_id), 'caption': caption,
-            'parse_mode': 'HTML', 'reply_markup': json.dumps(markup)},
-            'photo', banner_path(banner))
+        fields = {'chat_id': str(chat_id), 'caption': caption,
+                  'parse_mode': 'HTML', 'reply_markup': json.dumps(markup)}
+        if effect:
+            fields['message_effect_id'] = effect
+        res = upload(token, 'sendPhoto', fields, 'photo', banner_path(banner))
     if res and res.get('photo'):
         _remember(banner, res['photo'][-1]['file_id'])
     if res and replace_card:
@@ -295,8 +302,9 @@ def ensure_keyboard(token, chat_id, user):
         return
     call(token, 'sendMessage', {
         'chat_id': chat_id,
-        'text': '👇 Три кнопки внизу — они всегда под рукой. '
-                'А если что-то непонятно, просто напишите сюда: ответит человек.',
+        'parse_mode': 'HTML',
+        'text': S.animate('👇 Три кнопки внизу — они всегда под рукой. '
+                          'А если что-то непонятно, просто напишите сюда: ответит человек.'),
         'reply_markup': S.reply_keyboard(),
     })
     store.update(user['id'], kb_version=S.KEYBOARD_VERSION)
@@ -315,7 +323,7 @@ def edit_screen(token, chat_id, message_id, name, user):
     return call(token, 'editMessageMedia', {
         'chat_id': chat_id, 'message_id': message_id,
         'media': {'type': 'photo', 'media': fid,
-                  'caption': screen['caption'](profile), 'parse_mode': 'HTML'},
+                  'caption': S.animate(screen['caption'](profile)), 'parse_mode': 'HTML'},
         'reply_markup': keyboard(screen, profile),
     }, quiet=True)
 
@@ -353,7 +361,8 @@ def act_trial(token, cq):
     except (rw.NotConfigured, rw.RemnawaveError):
         pass
     answer(token, cq, 'Готово — %d дня бесплатно включены.' % S.TRIAL_DAYS)
-    edit_screen(token, msg['chat']['id'], msg['message_id'], 'activated', user)
+    send_screen(token, msg['chat']['id'], 'activated', user,
+                replace_card=True, effect=S.EFFECT_PARTY)
 
 
 def act_buy(token, cq, plan_id):
@@ -387,15 +396,8 @@ def act_pay(token, cq, plan_id):
     except (rw.NotConfigured, rw.RemnawaveError):
         pass
     answer(token, cq, 'Оплачено (демо). Работает до %s.' % S.human_date(until))
-    edit_screen(token, msg['chat']['id'], msg['message_id'], 'activated', user)
-
-
-def act_refstats(token, cq):
-    p = load_profile(cq['from'])
-    if not p['invited']:
-        answer(token, cq, 'Пока никто не перешёл по вашей ссылке. Отправьте её другу — %d дня бесплатно ему, %s вам.' % (S.TRIAL_DAYS, S.REFERRAL_REWARD), alert=True)
-    else:
-        answer(token, cq, 'По вашей ссылке пришли: %d. Подключили VPN: %d.' % (p['invited'], p['invited_connected']), alert=True)
+    send_screen(token, msg['chat']['id'], 'activated', user,
+                replace_card=True, effect=S.EFFECT_PARTY)
 
 
 ACTIONS = {}
@@ -411,8 +413,9 @@ def on_callback(token, cq):
         if name == 'home':
             name = S.home(load_profile(user))
         if name not in S.SCREENS:
-            answer(token, cq, 'Экран не найден')
-            return
+            # Кнопка со старой карточки, которой уже нет в боте, — не тупик:
+            # молча уводим домой.
+            name = S.home(load_profile(user))
         answer(token, cq)
         chat_id, mid = msg['chat']['id'], msg['message_id']
         is_root = name in S.ROOTS
@@ -435,8 +438,6 @@ def on_callback(token, cq):
         act_buy(token, cq, arg); return
     if key == 'pay':
         act_pay(token, cq, arg); return
-    if key == 'refstats':
-        act_refstats(token, cq); return
     answer(token, cq, ACTIONS.get(key, 'Этот раздел ещё в работе.'), alert=True)
 
 
@@ -466,15 +467,16 @@ def on_web_app_data(token, msg):
         print('    оплата из мини-аппы: %s' % t['id'])
     if ev in ('trial', 'paid'):
         # Окно закрылось сразу после активации: показываем «включено, один шаг»
-        send_screen(token, chat_id, 'activated', user, replace_card=True)
+        send_screen(token, chat_id, 'activated', user,
+                    replace_card=True, effect=S.EFFECT_PARTY)
         return
     if ev == 'connected':
         store.update(user['id'], connected=True)
-        send_screen(token, chat_id, 'ready', user, replace_card=True)
+        send_screen(token, chat_id, 'ready', user, replace_card=True, effect=S.EFFECT_FIRE)
     elif ev == 'failed':
         print('    не подключилось: %s, шаг %s' % (data.get('device', '?'), data.get('phase', '?')))
-        call(token, 'sendMessage', {'chat_id': chat_id,
-             'text': 'Вижу, что подключить не получилось. Вот что можно сделать 👇'})
+        call(token, 'sendMessage', {'chat_id': chat_id, 'parse_mode': 'HTML',
+             'text': S.animate('Вижу, что подключить не получилось. Вот что можно сделать 👇')})
         send_screen(token, chat_id, 'help', user)
 
 
@@ -528,12 +530,14 @@ def on_message(token, msg):
         send_screen(token, msg['chat']['id'], 'help', msg['from']); return True
 
     if cmd == '/stats' and msg['from']['id'] in ADMINS:
-        call(token, 'sendMessage', {'chat_id': msg['chat']['id'], 'parse_mode': 'HTML', 'text': stats_text()})
+        call(token, 'sendMessage', {'chat_id': msg['chat']['id'], 'parse_mode': 'HTML',
+                                    'text': S.animate(stats_text())})
         return True
     # /stats от не-админа проваливается ниже — как любая незнакомая команда, домой
 
     if cmd == '/connect':
-        call(token, 'sendMessage', {'chat_id': msg['chat']['id'], 'text': '👇 Нажмите, чтобы подключить VPN',
+        call(token, 'sendMessage', {'chat_id': msg['chat']['id'], 'parse_mode': 'HTML',
+             'text': S.animate('👇 Нажмите, чтобы подключить VPN'),
              'reply_markup': {'inline_keyboard': [[{'text': S.CONNECT, 'web_app': {'url': S.miniapp()}}]]}})
         return True
 
@@ -587,6 +591,10 @@ def on_message(token, msg):
 
     # Молчание выглядит как поломка. На любой текст отвечаем экраном,
     # а по приметам — сразу нужным разделом. Поддержка — отдельный бот.
+    # Сначала — анимированная реакция: человек сразу видит, что его прочли.
+    call(token, 'setMessageReaction',
+         {'chat_id': msg['chat']['id'], 'message_id': msg['message_id'],
+          'reaction': [{'type': 'emoji', 'emoji': '👀'}]}, quiet=True)
     low = text.lower()
     if any(w in low for w in ('оплат', 'продл', 'куп', 'тариф', 'цен', 'стои', 'скольк')):
         target = 'tariffs'
@@ -643,7 +651,7 @@ def notify(token, chat_id, banner, text, buttons):
     if not fid:
         return None
     return call(token, 'sendPhoto', {
-        'chat_id': chat_id, 'photo': fid, 'caption': text,
+        'chat_id': chat_id, 'photo': fid, 'caption': S.animate(text),
         'parse_mode': 'HTML',
         'reply_markup': {'inline_keyboard': buttons},
     })
@@ -661,7 +669,7 @@ def due_notifications(uid, rec, p, now):
     trial_at = parse_dt(rec.get('trial_at'))
     if (not p['connected'] and trial_at and now - trial_at > SILENT_AFTER_TRIAL
             and p['phase'] == 'active' and not store.was_notified(uid, 'connect', stamp)):
-        out.append(('connect', stamp, 'howto-banner.png',
+        out.append(('connect', stamp, 'howto-banner.jpg',
                     '🔌 <b>Остался один шаг</b>\n\n'
                     'Бесплатные дни уже идут, а VPN ещё не включён. '
                     'Давайте настроим — это одна минута.\n\n'
@@ -671,7 +679,7 @@ def due_notifications(uid, rec, p, now):
 
     # 2. Меньше суток
     if p['phase'] == 'expiring' and not store.was_notified(uid, 'expiring', stamp):
-        out.append(('expiring', stamp, 'expiring-banner.png',
+        out.append(('expiring', stamp, 'expiring-banner.jpg',
                     '⏳ <b>VPN отключится через %s</b>\n\n%s. Оплатите сейчас — '
                     'и ничего не прервётся, настраивать заново не придётся.'
                     % (S.span(p['left']),
@@ -681,7 +689,7 @@ def due_notifications(uid, rec, p, now):
 
     # 3. Кончилось
     if p['phase'] == 'expired' and not store.was_notified(uid, 'expired', stamp):
-        out.append(('expired', stamp, 'expired-banner.png',
+        out.append(('expired', stamp, 'expired-banner.jpg',
                     '🔴 <b>VPN отключён</b>\n\n%s. Оплатите — и всё заработает снова, '
                     'настраивать заново не нужно.'
                     % ('Бесплатные дни закончились' if trial
