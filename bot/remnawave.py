@@ -168,16 +168,60 @@ def ping(cfg):
     return True
 
 
+def selfcheck(cfg):
+    """
+    Полная проверка связки: панель отвечает, токен принят, поля называются
+    так, как ждёт мини-аппа. Ничего не создаёт и не меняет.
+    """
+    print('панель:       %s' % cfg['base_url'])
+    print('префикс имён: %s' % cfg['user_prefix'])
+    status, body = _request(cfg, 'GET', '/api/users?size=1&start=0')
+    if status in (401, 403):
+        raise RemnawaveError('токен не принят (HTTP %s). Проверьте, что это токен '
+                             'с ролью API и он не отозван.' % status)
+    if status >= 400:
+        raise RemnawaveError('панель ответила HTTP %s' % status)
+    print('доступ:       токен принят')
+
+    resp = body.get('response', body)
+    users = resp.get('users') if isinstance(resp, dict) else None
+    total = resp.get('total') if isinstance(resp, dict) else None
+    if total is not None:
+        print('пользователей в панели: %s' % total)
+
+    # Мастер подключения в мини-аппе держится на двух полях. Если панель
+    # их не отдаёт, «Подключено» никогда не наступит — лучше узнать сразу.
+    NEEDED = ('subscriptionUrl', 'expireAt', 'hwidDeviceLimit',
+              'subLastOpenedAt', 'subLastUserAgent', 'onlineAt')
+    if users:
+        have = set(users[0].keys())
+        missing = [f for f in NEEDED if f not in have]
+        print('поля пользователя: %s' % ('все на месте' if not missing
+                                         else 'НЕ ХВАТАЕТ ' + ', '.join(missing)))
+    else:
+        print('поля пользователя: в панели пока нет ни одного — проверим после '
+              'первой выдачи триала')
+
+    status, body = _request(cfg, 'GET', '/api/internal-squads')
+    if status < 400:
+        squads = (body.get('response') or body).get('internalSquads') or []
+        if squads:
+            print('внутренние отряды (для internal_squads в конфиге):')
+            for sq in squads:
+                print('   %s  %s' % (sq.get('uuid'), sq.get('name')))
+        else:
+            print('внутренние отряды: ни одного — пользователю не к чему '
+                  'подключиться, создайте отряд в панели')
+    return True
+
+
 if __name__ == '__main__':
     # Проверка доступа: python3 bot/remnawave.py
     try:
         cfg = load_config()
     except NotConfigured as e:
         raise SystemExit('Remnawave не настроен: %s' % e)
-    print('панель: %s' % cfg['base_url'])
-    print('префикс имён: %s' % cfg['user_prefix'])
     try:
-        ping(cfg)
-        print('доступ: ок')
+        selfcheck(cfg)
     except RemnawaveError as e:
-        raise SystemExit('доступ: %s' % e)
+        raise SystemExit('ошибка: %s' % e)
