@@ -843,6 +843,27 @@ def check_links():
         print('    заменить в screens.py до запуска на людях')
 
 
+def check_panel():
+    """
+    Жива ли панель. Отдельной проверкой, потому что её смерть незаметна:
+    бот молча возвращается к локальной памяти, продолжает работать и
+    раздаёт подписки, которых на самом деле нет.
+    """
+    try:
+        cfg = rw.load_config()
+    except rw.NotConfigured as e:
+        print('  панель Remnawave не настроена (%s) — работаем на локальной памяти' % e)
+        return
+    try:
+        rw.ping(cfg)
+        print('  панель Remnawave: отвечает (%s)' % cfg['base_url'])
+    except rw.RemnawaveError as e:
+        print('  ! ПАНЕЛЬ НЕ ОТВЕЧАЕТ: %s' % e)
+        print('    адрес: %s' % cfg['base_url'])
+        print('    подписки выдаваться не будут; если это временный туннель —'
+              ' он умер, нужен новый адрес в ~/.config/hanvpn/remnawave.json')
+
+
 def main():
     global BOT_USERNAME
     token = read_token()
@@ -863,6 +884,7 @@ def main():
     print('бот @%s слушает, экранов: %d. Ctrl+C — остановить'
           % (BOT_USERNAME, len(S.SCREENS)))
     check_links()
+    check_panel()
 
 
     threading.Thread(target=notifier, args=(token,), daemon=True).start()
