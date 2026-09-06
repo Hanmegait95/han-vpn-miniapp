@@ -60,6 +60,9 @@ DATA_LAYER = """  /* ── Бэкенд ─────────────
     { id: 'y1', title: 'Год',      price: '1490 ₽', days: 365 },
   ];
   let SUB_LINK = '';               // приходит с бэка вместе со статусом
+  const DEMO_NOTE = '';            // предупреждение о заглушке — только в прототипе
+  const CHECK_URL = 'https://www.instagram.com/';                          // TODO: сайт, который без VPN не открывается
+  const TRIAL_DEVICES = 1;
   const sub = { kind: 'new', until: null, fetchedAt: null };
   function loadSub() {}            // в бою состояние только с бэка
   function saveSub() {}
@@ -116,14 +119,19 @@ def main():
     s = io.open(SRC, encoding='utf-8').read()
     check_js(s, SRC)
 
+    # Всё, что объявлено в вырезаемом куске: если имя останется в ходу,
+    # а объявление уедет, страница упадёт на первом же обращении.
+    import re
+    i, j = s.find('  /* ── Бэкенд ─────'), s.find('  /* ── Статус ─────')
+    # Только верхний уровень модуля (два пробела отступа): локальные
+    # переменные внутри функций уезжают вместе со своими функциями.
+    dropped = set(re.findall(r'(?m)^  (?:const|let|var|function)\s+([A-Za-z_$][\w$]*)', s[i:j]))
+
     # ── слой данных: заглушка → бэк ─────────────────────────────
     s = cut(s, '  /* ── Бэкенд ─────', '  /* ── Статус ─────', 'заглушка бэка')
     s = must_replace(s, '  /* ── Статус ─────', DATA_LAYER + '  /* ── Статус ─────', 'вставка слоя данных')
 
-    # ── ссылки наружу ───────────────────────────────────────────
-    s = must_replace(s, "  const DOWNLOAD_URL = (device) => 'https://hanvpn.app/download/incy/' + device;   // TODO: ваш редирект в магазин",
-                     "  const DOWNLOAD_URL = (device) => 'https://example.com/download/incy/' + device;    // TODO: ваш редирект в магазин",
-                     'ссылка на загрузку')
+    # ── ссылки на магазины настоящие, править нечего ─────────────
 
     # ── оплата: без сервера не притворяемся, что оплатили ──────
     s = must_replace(s, """        await API.pay(t);
@@ -162,8 +170,8 @@ def main():
     # ── тестовые крючки прототипа (sim=…) в бою не нужны ─────────
     s = must_replace(s, "    } else if (!Q.has('sim')) {      // sim=… — проверка в браузере без запуска приложений",
                      "    } else {", 'sim в openExternal')
-    s = must_replace(s, "    sub.fetchedAt = Q.get('sim') === 'fail' ? null : Date.now() + 4500; saveSub();   // sim=ok|fail — для проверки\n",
-                     "", 'sim в tryConnect')
+    s = cut(s, '    // Подтверждение приходит только с сервера',
+            '    openExternal(', 'подделка подтверждения')
 
     # ── проверки ────────────────────────────────────────────────
     leftovers = [w for w in ("Q.get('kind')", 'han.sub', 'sub.hanvpn.app', 'sim=', "Q.has('sim')", 'class="proto', 'class="stage',
@@ -171,6 +179,16 @@ def main():
                  if w in s]
     if leftovers:
         sys.exit('в продакшен-версии осталась обвязка: ' + ', '.join(leftovers))
+
+    # Синтаксис такого не ловит: имя используется, а объявления нет.
+    # «sub.kind» — не использование имени kind, поэтому обращения
+    # к свойствам не считаем.
+    lost = sorted(n for n in dropped
+                  if re.search(r'(?<![.\w$])%s\b' % n, s)
+                  and not re.search(r'\b(?:const|let|var|function)\s+%s\b' % n, s))
+    if lost:
+        sys.exit('в продакшен-версии используется, но нигде не объявлено: %s\n'
+                 'перенесите объявление в DATA_LAYER' % ', '.join(lost))
 
     check_js(s, OUT)
     os.makedirs('production', exist_ok=True)

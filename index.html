@@ -446,6 +446,15 @@
   const CHECK_URL = 'https://www.instagram.com/';   // TODO: сайт, который без VPN не открывается
   const SUB_LINK = 'https://sub.hanvpn.app/user_' + (TG_USER ? TG_USER.id : '000000000');
 
+  /* Пока ссылка подписки — заглушка, приложению нечего забирать: домена
+     sub.hanvpn.app не существует. Молчать об этом нельзя, иначе человек
+     решит, что сломано приложение. В боевой сборке ссылка приходит
+     с сервера, и предупреждение исчезает само. */
+  const DEMO_NOTE = /sub\.hanvpn\.app/.test(SUB_LINK)
+    ? '<br><br><i>Это демо-версия: сервер подписок ещё не подключён, '
+      + 'поэтому VPN пока не заработает — приложению нечего забрать.</i>'
+    : '';
+
   const sub = { kind: 'new', until: null, fetchedAt: null };
 
   let urlApplied = false;
@@ -606,7 +615,30 @@
     other:        { title: 'моё приложение', add: null, open: null,               on: ['ios','android','macos','windows','linux','tv'] },
   };
   const MAIN_APPS = ['INCY', 'Happ'];
-  const DOWNLOAD_URL = (device) => 'https://hanvpn.app/download/incy/' + device;   // TODO: ваш редирект в магазин
+  /* Куда идти за приложением. Ссылки официальные; десктоп и телевизор
+     ведут на страницу со сборками — единой ссылки на магазин там нет. */
+  const STORES = {
+    INCY: {
+      ios:     'https://apps.apple.com/app/id6756943388',
+      macos:   'https://apps.apple.com/app/id6756943388',
+      android: 'https://play.google.com/store/apps/details?id=llc.itdev.incy',
+      tv:      'https://play.google.com/store/apps/details?id=llc.itdev.incy',
+      windows: 'https://github.com/INCY-DEV/incy-platforms',
+      linux:   'https://github.com/INCY-DEV/incy-platforms',
+    },
+    Happ: {
+      ios:     'https://apps.apple.com/app/id6504287215',
+      macos:   'https://www.happ.su/main',
+      android: 'https://play.google.com/store/apps/details?id=com.happproxy',
+      tv:      'https://play.google.com/store/apps/details?id=com.happproxy',
+      windows: 'https://www.happ.su/main',
+      linux:   'https://www.happ.su/main',
+    },
+  };
+  const DOWNLOAD_URL = (device, app) => {
+    const m = STORES[app] || STORES.INCY;
+    return m[device] || m.android;
+  };
 
   const DEVICES = {
     ios:     { short: 'iPhone',  what: 'из App Store',             finish: 'Нажмите «Загрузить» и дождитесь, пока приложение установится.' },
@@ -654,7 +686,10 @@
 
   function tryConnect() {
     beacon('tap-connect', { app: currentApp(), phase: state.phase });
-    sub.fetchedAt = Q.get('sim') === 'fail' ? null : Date.now() + 4500; saveSub();   // sim=ok|fail — для проверки
+    // Подтверждение приходит только с сервера: он видит, что приложение
+    // забрало конфиг по ссылке подписки. Пока сервера нет, прототип честно
+    // дойдёт до «пока не видим подписку». ?sim=ok — подделать для показа.
+    if (Q.get('sim') === 'ok') { sub.fetchedAt = Date.now() + 4500; saveSub(); }
     openExternal(appInfo().add(SUB_LINK));
     go('checking');
   }
@@ -663,9 +698,9 @@
     connect: {
       step: 1,
       title: () => state.installing ? 'Установили INCY? Подключаем' : 'Подключите VPN',
-      text: () => currentApp() === 'INCY'
+      text: () => (currentApp() === 'INCY'
         ? 'Нажмите — откроется <b>INCY</b>, подписка добавится сама. Если INCY ещё нет, покажем, где взять.'
-        : 'Нажмите — откроется <b>' + appTitle() + '</b>, подписка добавится сама.',
+        : 'Нажмите — откроется <b>' + appTitle() + '</b>, подписка добавится сама.') + DEMO_NOTE,
       cta: () => 'Подключить',
       run: tryConnect,
       alts: () => [
@@ -685,11 +720,19 @@
       step: 1, back: 'connect',
       title: () => state.retryReason || 'Не открылось приложение?',
       text: () => 'Значит, его нет или стоит другое. Выберите, что подходит:',
-      choices: () => [
-        { label: '⬇️ Установить INCY', install: true, run: () => { state.installing = true; state.appId = 'INCY'; save(); openExternal(DOWNLOAD_URL(state.device)); go('connect'); } },
-        { label: 'У меня Happ', run: () => { state.appId = 'Happ'; save(); tryConnect(); } },
-        { label: 'Другое приложение', run: pickApp },
-      ],
+      choices: () => {
+        // Ставим то приложение, которое человек выбрал, а не всегда INCY:
+        // предложить установку INCY тому, кто только что сказал «у меня Happ», — издевательство.
+        const mine = currentApp() === 'Happ' ? 'Happ' : 'INCY';
+        const other = mine === 'INCY' ? 'Happ' : 'INCY';
+        return [
+          { label: '⬇️ Установить ' + mine, install: true, run: () => {
+              state.installing = true; state.appId = mine; save();
+              openExternal(DOWNLOAD_URL(state.device, mine)); go('connect'); } },
+          { label: 'У меня ' + other, run: () => { state.appId = other; save(); tryConnect(); } },
+          { label: 'Другое приложение', run: pickApp },
+        ];
+      },
       alts: () => [
         { label: 'попробовать ещё раз', run: tryConnect },
         CAN_TELL ? { label: 'не получается — позвать помощь', run: () => tellBot({ event: 'failed' }) } : null,
